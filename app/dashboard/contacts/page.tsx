@@ -39,12 +39,12 @@ export default function ContactsPage() {
       .select("*")
       .order("created_at", { ascending: false })
 
-    if (error) {
-      console.error("Error loading contacts:", error)
-      alert("Error cargando contactos")
-    } else {
-      setContacts(data || [])
-    }
+      if (error) {
+        console.error("Error loading contacts:", error)
+        alert("Error cargando contactos: " + error.message)
+      } else {
+        setContacts(data || [])
+      }
 
     setLoading(false)
   }
