@@ -143,12 +143,43 @@ export default function ContactsPage() {
     setShowForm(true)
   }
 
-  function sendSelectedContacts() {
-    const selected = allContactIds.filter((id) => selectedContactIds.has(id))
+  async function sendSelectedContacts() {
+    const selectedIds = allContactIds.filter((id) => selectedContactIds.has(id))
+    const selectedContacts = contacts.filter(
+      (c) => c.id && selectedIds.includes(c.id)
+    )
+    const phones = selectedContacts
+      .map((c) => c.phone)
+      .filter((phone) => !!phone && phone.trim().length > 0)
 
-    // Acción placeholder: aquí puedes integrar tu envío real (API, email, etc.)
-    console.log("Contactos seleccionados para enviar:", selected)
-    alert(`Seleccionaste ${selected.length} contacto(s) para enviar.`)
+    if (phones.length === 0) {
+      alert("Los contactos seleccionados no tienen teléfono válido.")
+      return
+    }
+
+    try {
+      const res = await fetch("/API/send-whatsapp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ phones }),
+      })
+
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}))
+        console.error("Error en API send-whatsapp:", errorBody)
+        alert("Hubo un problema enviando el mensaje por WhatsApp.")
+        return
+      }
+
+      const data = await res.json().catch(() => null)
+      console.log("Respuesta de send-whatsapp:", data)
+      alert(`Se intentó enviar WhatsApp a ${phones.length} contacto(s).`)
+    } catch (error) {
+      console.error("Error llamando a /api/send-whatsapp:", error)
+      alert("Error de red al intentar enviar el WhatsApp.")
+    }
   }
 
   async function deleteSelectedContacts() {
@@ -249,6 +280,7 @@ export default function ContactsPage() {
               opacity: selectedContactIds.size === 0 ? 0.9 : 1,
             }}
             aria-disabled={selectedContactIds.size === 0}
+            aria-label="Enviar contactos seleccionados"
             title={
               selectedContactIds.size === 0
                 ? "Selecciona uno o más contactos"
@@ -278,7 +310,6 @@ export default function ContactsPage() {
                 strokeLinejoin="round"
               />
             </svg>
-            Enviar
           </button>
 
           <button
