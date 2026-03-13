@@ -30,6 +30,7 @@ export default function ContactsPage() {
   })
 
   const [showForm, setShowForm] = useState(false)
+  const modalCardRef = useRef<HTMLDivElement>(null)
 
   async function loadContacts() {
     setLoading(true)
@@ -106,6 +107,23 @@ export default function ContactsPage() {
     })
     setEditingContactId(null)
   }
+
+  function closeModal() {
+    setShowForm(false)
+    resetFormAndEditingState()
+  }
+
+  useEffect(() => {
+    if (!showForm) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeModal()
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showForm])
 
   function startEditing(contact: Contact) {
     if (!contact.id) {
@@ -336,8 +354,7 @@ export default function ContactsPage() {
           <button
             onClick={() => {
               if (showForm) {
-                setShowForm(false)
-                resetFormAndEditingState()
+                closeModal()
                 return
               }
               resetFormAndEditingState()
@@ -358,104 +375,101 @@ export default function ContactsPage() {
       </div>
 
       {showForm && (
-        <form
-          onSubmit={handleSubmit}
-          style={{
-            background: "white",
-            padding: "20px",
-            borderRadius: "12px",
-            marginBottom: "24px",
-            border: "1px solid #e5e7eb",
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={editingContactId ? "Editar contacto" : "Nuevo contacto"}
+          style={modalOverlayStyle}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closeModal()
           }}
         >
-          <div style={formRowStyle}>
-            <input
-              type="text"
-              name="name"
-              placeholder="Nombre"
-              value={form.name}
-              onChange={handleChange}
-              style={inputStyle}
-            />
+          <div ref={modalCardRef} style={modalCardStyle}>
+            <div style={modalHeaderStyle}>
+              <h2 style={{ margin: 0, fontSize: 18 }}>
+                {editingContactId ? "Editar contacto" : "Nuevo contacto"}
+              </h2>
+              <button
+                type="button"
+                onClick={closeModal}
+                style={modalCloseButtonStyle}
+                aria-label="Cerrar"
+              >
+                ×
+              </button>
+            </div>
 
-            <input
-              type="email"
-              name="email"
-              placeholder="Correo"
-              value={form.email}
-              onChange={handleChange}
-              style={inputStyle}
-            />
+            <form onSubmit={handleSubmit}>
+              <div style={formRowStyle}>
+                <input
+                  type="text"
+                  name="name"
+                  placeholder="Nombre"
+                  value={form.name}
+                  onChange={handleChange}
+                  style={inputStyle}
+                  autoFocus
+                />
+
+                <input
+                  type="email"
+                  name="email"
+                  placeholder="Correo"
+                  value={form.email}
+                  onChange={handleChange}
+                  style={inputStyle}
+                />
+              </div>
+
+              <div style={formRowStyle}>
+                <input
+                  type="text"
+                  name="phone"
+                  placeholder="Teléfono"
+                  value={form.phone}
+                  onChange={handleChange}
+                  style={inputStyle}
+                />
+
+                <input
+                  type="text"
+                  name="company"
+                  placeholder="Empresa"
+                  value={form.company}
+                  onChange={handleChange}
+                  style={inputStyle}
+                />
+              </div>
+
+              <div style={{ marginBottom: "16px" }}>
+                <select
+                  name="status"
+                  value={form.status}
+                  onChange={handleChange}
+                  style={inputStyle}
+                >
+                  <option value="">Selecciona un status</option>
+                  <option value="Lead">Lead</option>
+                  <option value="Cliente">Cliente</option>
+                  <option value="Prospecto">Prospecto</option>
+                </select>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  style={secondaryButtonStyle}
+                >
+                  Cancelar
+                </button>
+                <button type="submit" style={primaryButtonStyle}>
+                  {editingContactId ? "Actualizar" : "Guardar"}
+                </button>
+              </div>
+            </form>
           </div>
-
-          <div style={formRowStyle}>
-            <input
-              type="text"
-              name="phone"
-              placeholder="Teléfono"
-              value={form.phone}
-              onChange={handleChange}
-              style={inputStyle}
-            />
-
-            <input
-              type="text"
-              name="company"
-              placeholder="Empresa"
-              value={form.company}
-              onChange={handleChange}
-              style={inputStyle}
-            />
-          </div>
-
-          <div style={{ marginBottom: "16px" }}>
-            <select
-              name="status"
-              value={form.status}
-              onChange={handleChange}
-              style={inputStyle}
-            >
-              <option value="">Selecciona un status</option>
-              <option value="Lead">Lead</option>
-              <option value="Cliente">Cliente</option>
-              <option value="Prospecto">Prospecto</option>
-            </select>
-          </div>
-
-          <button
-            type="submit"
-            style={{
-              background: "#2563eb",
-              color: "white",
-              border: "none",
-              padding: "10px 16px",
-              borderRadius: "8px",
-              cursor: "pointer",
-            }}
-          >
-            {editingContactId ? "Actualizar contacto" : "Guardar contacto"}
-          </button>
-          {editingContactId && (
-            <button
-              type="button"
-              onClick={() => {
-                resetFormAndEditingState()
-                setShowForm(false)
-              }}
-              style={{
-                marginLeft: "10px",
-                background: "white",
-                color: "#111827",
-                border: "1px solid #d1d5db",
-                padding: "10px 16px",
-                borderRadius: "8px",
-                cursor: "pointer",
-              }}
-            >
-              Cancelar
-            </button>
-          )}
-        </form>
+        </div>
       )}
 
       {loading ? (
@@ -515,6 +529,8 @@ export default function ContactsPage() {
                   <button
                     type="button"
                     onClick={() => startEditing(contact)}
+                    aria-label={`Editar ${contact.name}`}
+                    title="Editar"
                     style={{
                       background: "transparent",
                       border: "1px solid #d1d5db",
@@ -523,7 +539,29 @@ export default function ContactsPage() {
                       cursor: "pointer",
                     }}
                   >
-                    Editar
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M12 20H21"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M16.5 3.5C16.8978 3.10217 17.4374 2.87866 18 2.87866C18.5626 2.87866 19.1022 3.10217 19.5 3.5C19.8978 3.89782 20.1213 4.43739 20.1213 5C20.1213 5.56261 19.8978 6.10217 19.5 6.5L7 19L3 20L4 16L16.5 3.5Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
                   </button>
                 </td>
               </tr>
@@ -558,4 +596,60 @@ const thStyle = {
 const tdStyle = {
   padding: "12px",
   borderBottom: "1px solid #eee",
+}
+
+const modalOverlayStyle = {
+  position: "fixed" as const,
+  inset: 0,
+  background: "rgba(17, 24, 39, 0.55)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 16,
+  zIndex: 50,
+}
+
+const modalCardStyle = {
+  width: "min(720px, 100%)",
+  background: "white",
+  borderRadius: 14,
+  border: "1px solid #e5e7eb",
+  boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+  padding: 16,
+}
+
+const modalHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginBottom: 12,
+}
+
+const modalCloseButtonStyle = {
+  width: 36,
+  height: 36,
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  background: "white",
+  cursor: "pointer",
+  fontSize: 20,
+  lineHeight: "32px",
+}
+
+const primaryButtonStyle = {
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "10px 16px",
+  borderRadius: "8px",
+  cursor: "pointer",
+}
+
+const secondaryButtonStyle = {
+  background: "white",
+  color: "#111827",
+  border: "1px solid #d1d5db",
+  padding: "10px 16px",
+  borderRadius: "8px",
+  cursor: "pointer",
 }
