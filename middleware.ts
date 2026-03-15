@@ -1,8 +1,13 @@
 import { createServerClient } from "@supabase/ssr"
-import { NextResponse, type NextRequest } from "next/server"
+import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  const response = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
+  })
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,44 +18,29 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          )
-          supabaseResponse = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
+          cookiesToSet.forEach(({ name, value, options }) => {
+            response.cookies.set(name, value, options)
+          })
         },
       },
     }
   )
 
-  // Refrescar sesión si existe (necesario para mantener la cookie actualizada)
   const { data: { user } } = await supabase.auth.getUser()
 
-  const isLoginPage = request.nextUrl.pathname === "/login"
-  const isDashboard = request.nextUrl.pathname.startsWith("/dashboard")
+  const { pathname } = request.nextUrl
 
-  // Si intenta acceder al dashboard sin sesión → redirigir al login
-  if (isDashboard && !user) {
-    const loginUrl = request.nextUrl.clone()
-    loginUrl.pathname = "/login"
-    return NextResponse.redirect(loginUrl)
+  if (pathname.startsWith("/dashboard") && !user) {
+    return NextResponse.redirect(new URL("/login", request.url))
   }
 
-  // Si ya tiene sesión e intenta ir al login → redirigir al dashboard
-  if (isLoginPage && user) {
-    const dashboardUrl = request.nextUrl.clone()
-    dashboardUrl.pathname = "/dashboard"
-    return NextResponse.redirect(dashboardUrl)
+  if (pathname === "/login" && user) {
+    return NextResponse.redirect(new URL("/dashboard", request.url))
   }
 
-  return supabaseResponse
+  return response
 }
 
 export const config = {
-  matcher: [
-    "/dashboard/:path*",
-    "/login",
-  ],
+  matcher: ["/dashboard/:path*", "/login"],
 }
