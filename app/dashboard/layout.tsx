@@ -86,7 +86,6 @@ const NAV_ITEMS = [
   { href: "/dashboard/agentes",    label: "Agentes",    Icon: IconAgentes    },
   { href: "/dashboard/soporte",    label: "Chat",       Icon: IconChat       },
   { href: "/dashboard/plantillas", label: "Plantillas", Icon: IconPlantillas },
-  { href: "/dashboard/respuestas", label: "Respuestas", Icon: IconRespuestas },
 ]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -107,7 +106,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     pathname === "/dashboard/contacts"   ||
     pathname === "/dashboard/agentes"    ||
     pathname === "/dashboard/plantillas" ||
-    pathname === "/dashboard/respuestas"
+    pathname === "/dashboard/ajustes"
 
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard"
