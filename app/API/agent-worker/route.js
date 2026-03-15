@@ -34,14 +34,35 @@ export async function POST(req) {
 
   const debounceSeconds = Math.max(0, parseInt(setting?.value ?? "5", 10))
 
-  console.log(`[worker] conv=${conversation_id} debounce=${debounceSeconds}s`)
+  console.log(`[worker] conv=${conversation_id} debounce=${debounceSeconds}s ts=${message_timestamp}`)
 
-  // 2. Si debounce > 0, esperar
+  // 2. Registrar este mensaje como el último visto (solo si es más reciente que el existente)
+  // Usamos upsert pero con un check: no retroceder si ya hay un timestamp mayor
+  const { data: existingRow } = await supabase
+    .from("message_debounce")
+    .select("last_message_at")
+    .eq("conversation_id", conversation_id)
+    .maybeSingle()
+
+  const existingAt = existingRow ? new Date(existingRow.last_message_at).getTime() : 0
+  const thisAt     = new Date(message_timestamp).getTime()
+
+  if (thisAt >= existingAt) {
+    await supabase
+      .from("message_debounce")
+      .upsert({
+        conversation_id: conversation_id,
+        last_message_at: message_timestamp,
+        pending_text:    content,
+      }, { onConflict: "conversation_id" })
+  }
+
+  // 3. Si debounce > 0, esperar
   if (debounceSeconds > 0) {
     await new Promise((resolve) => setTimeout(resolve, debounceSeconds * 1000))
   }
 
-  // 3. Verificar si llegó un mensaje más nuevo durante la espera
+  // 4. Volver a leer: ¿llegó un mensaje más nuevo mientras esperábamos?
   const { data: debounceRow } = await supabase
     .from("message_debounce")
     .select("last_message_at, pending_text")
@@ -56,8 +77,9 @@ export async function POST(req) {
   const storedAt  = new Date(debounceRow.last_message_at).getTime()
   const currentAt = new Date(message_timestamp).getTime()
 
-  if (storedAt > currentAt) {
-    console.log(`[worker] Mensaje más reciente detectado — cediendo paso conv=${conversation_id}`)
+  // Ceder si hay un mensaje más reciente (o igual pero con pequeña tolerancia de 500ms para race conditions)
+  if (storedAt > currentAt + 500) {
+    console.log(`[worker] Mensaje más reciente detectado (stored=${storedAt} > current=${currentAt}) — cediendo paso conv=${conversation_id}`)
     return Response.json({ action: "cancelled", reason: "newer_message" })
   }
 

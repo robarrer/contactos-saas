@@ -234,30 +234,20 @@ function scheduleWorker(conversationId, content, waId, messageTimestamp) {
   if (!baseUrl && process.env.VERCEL_URL) baseUrl = `https://${process.env.VERCEL_URL}`
   if (!baseUrl) baseUrl = "http://localhost:3000"
 
-  // Registrar debounce en DB antes de llamar al worker
-  supabase
-    .from("message_debounce")
-    .upsert({
-      conversation_id: conversationId,
-      last_message_at: messageTimestamp,
-      pending_text:    content,
-    }, { onConflict: "conversation_id" })
-    .then(() => {
-      // Llamar al worker sin await — Vercel mantiene viva la request del worker independientemente
-      fetch(`${baseUrl}/API/agent-worker`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          conversation_id:   conversationId,
-          content,
-          wa_id:             waId,
-          message_timestamp: messageTimestamp,
-        }),
-      }).catch((e) => console.error("[webhook] Error llamando worker:", e.message))
-    })
-    .catch((e) => console.error("[webhook] Error guardando debounce:", e.message))
+  // Llamar al worker sin await — fire-and-forget
+  // El upsert del debounce lo hace el propio worker con await para evitar race conditions
+  fetch(`${baseUrl}/API/agent-worker`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      conversation_id:   conversationId,
+      content,
+      wa_id:             waId,
+      message_timestamp: messageTimestamp,
+    }),
+  }).catch((e) => console.error("[webhook] Error llamando worker:", e.message))
 
-  console.log(`[webhook] Worker programado para conv=${conversationId}`)
+  console.log(`[webhook] Worker llamado para conv=${conversationId}`)
 }
 
 // ─── Actualizar estado de mensaje saliente ────────────────────────────────────
