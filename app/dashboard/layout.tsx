@@ -10,7 +10,7 @@ export default function DashboardLayout({
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
-  const isFullscreen = pathname === "/dashboard/soporte" || pathname === "/dashboard/embudo" || pathname === "/dashboard/contacts"
+  const isFullscreen = pathname === "/dashboard/soporte" || pathname === "/dashboard/embudo" || pathname === "/dashboard/contacts" || pathname === "/dashboard/agentes"
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
@@ -119,6 +119,26 @@ export default function DashboardLayout({
               🗂
             </span>
             {!collapsed && <span>Embudo</span>}
+          </a>
+
+          <a
+            href="/dashboard/agentes"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              color: "white",
+              textDecoration: "none",
+              padding: "10px 10px",
+              borderRadius: 10,
+              background: "rgba(255,255,255,0.04)",
+            }}
+            title={collapsed ? "Agentes" : undefined}
+          >
+            <span aria-hidden="true" style={{ width: 18, textAlign: "center" }}>
+              🤖
+            </span>
+            {!collapsed && <span>Agentes</span>}
           </a>
 
           <a
