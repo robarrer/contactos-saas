@@ -8,13 +8,15 @@ const supabase = createClient(
 /**
  * POST /API/agent-worker
  *
- * Recibe { conversation_id, content, wa_id, message_timestamp }
- * Espera el tiempo de debounce configurado, verifica si hay mensajes más nuevos,
- * y si es el último invoca al agente IA.
+ * Estrategia "último gana" sin setTimeout:
  *
- * Este endpoint es llamado por el webhook en fire-and-forget (sin await),
- * lo que permite al webhook responder 200 a Meta de inmediato mientras
- * este worker sigue ejecutándose en su propia request de Vercel.
+ * 1. Registra este mensaje en message_debounce (timestamp + texto)
+ * 2. Espera debounce_seconds leyendo periódicamente de Supabase
+ *    (polling cada 1s en lugar de setTimeout largo — compatible con Vercel Hobby 10s limit)
+ * 3. Si al final sigue siendo el último mensaje, invoca al agente
+ *
+ * Limitación: con debounce > 8s en plan Hobby puede timeout.
+ * Solución recomendada: usar plan Pro (60s) o mantener debounce <= 8s.
  */
 export async function POST(req) {
   let body
@@ -32,19 +34,18 @@ export async function POST(req) {
     .eq("key", "message_debounce_seconds")
     .maybeSingle()
 
-  const debounceSeconds = Math.max(0, parseInt(setting?.value ?? "5", 10))
+  const debounceSeconds = Math.max(0, Math.min(8, parseInt(setting?.value ?? "5", 10)))
 
-  console.log(`[worker] conv=${conversation_id} debounce=${debounceSeconds}s ts=${message_timestamp}`)
+  console.log(`[worker] START conv=${conversation_id} debounce=${debounceSeconds}s ts=${message_timestamp}`)
 
-  // 2. Registrar este mensaje como el último visto (solo si es más reciente que el existente)
-  // Usamos upsert pero con un check: no retroceder si ya hay un timestamp mayor
-  const { data: existingRow } = await supabase
+  // 2. Registrar este mensaje como candidato (solo si timestamp >= existente)
+  const { data: existing } = await supabase
     .from("message_debounce")
     .select("last_message_at")
     .eq("conversation_id", conversation_id)
     .maybeSingle()
 
-  const existingAt = existingRow ? new Date(existingRow.last_message_at).getTime() : 0
+  const existingAt = existing ? new Date(existing.last_message_at).getTime() : 0
   const thisAt     = new Date(message_timestamp).getTime()
 
   if (thisAt >= existingAt) {
@@ -55,39 +56,44 @@ export async function POST(req) {
         last_message_at: message_timestamp,
         pending_text:    content,
       }, { onConflict: "conversation_id" })
+    console.log(`[worker] Registrado en debounce conv=${conversation_id}`)
+  } else {
+    console.log(`[worker] Ignorado (más antiguo) conv=${conversation_id} existing=${existingAt} this=${thisAt}`)
+    return Response.json({ action: "skipped", reason: "older_message" })
   }
 
-  // 3. Si debounce > 0, esperar
+  // 3. Esperar el tiempo de debounce usando polling cada 500ms
   if (debounceSeconds > 0) {
-    await new Promise((resolve) => setTimeout(resolve, debounceSeconds * 1000))
+    const deadline    = Date.now() + debounceSeconds * 1000
+    const pollMs      = 500
+
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, pollMs))
+
+      const { data: current } = await supabase
+        .from("message_debounce")
+        .select("last_message_at")
+        .eq("conversation_id", conversation_id)
+        .maybeSingle()
+
+      if (!current) {
+        console.log(`[worker] Fila eliminada durante espera — conv=${conversation_id}`)
+        return Response.json({ action: "cancelled", reason: "row_gone" })
+      }
+
+      const latestAt = new Date(current.last_message_at).getTime()
+      if (latestAt > thisAt + 500) {
+        console.log(`[worker] Mensaje más reciente detectado durante polling (latest=${latestAt} > this=${thisAt}) — cediendo conv=${conversation_id}`)
+        return Response.json({ action: "cancelled", reason: "newer_message" })
+      }
+    }
   }
 
-  // 4. Volver a leer: ¿llegó un mensaje más nuevo mientras esperábamos?
-  const { data: debounceRow } = await supabase
-    .from("message_debounce")
-    .select("last_message_at, pending_text")
-    .eq("conversation_id", conversation_id)
-    .maybeSingle()
-
-  if (!debounceRow) {
-    console.log(`[worker] Fila debounce eliminada — cancelando conv=${conversation_id}`)
-    return Response.json({ action: "cancelled", reason: "debounce_row_gone" })
-  }
-
-  const storedAt  = new Date(debounceRow.last_message_at).getTime()
-  const currentAt = new Date(message_timestamp).getTime()
-
-  // Ceder si hay un mensaje más reciente (o igual pero con pequeña tolerancia de 500ms para race conditions)
-  if (storedAt > currentAt + 500) {
-    console.log(`[worker] Mensaje más reciente detectado (stored=${storedAt} > current=${currentAt}) — cediendo paso conv=${conversation_id}`)
-    return Response.json({ action: "cancelled", reason: "newer_message" })
-  }
-
-  // 4. Este es el último mensaje — concatenar mensajes recientes para el agente
-  const windowStart = new Date(currentAt - debounceSeconds * 1000 - 2000).toISOString()
+  // 4. Soy el último mensaje — concatenar todos los mensajes del window
+  const windowStart = new Date(thisAt - debounceSeconds * 1000 - 1000).toISOString()
   const { data: recentMsgs } = await supabase
     .from("messages")
-    .select("content")
+    .select("content, created_at")
     .eq("conversation_id", conversation_id)
     .eq("direction", "inbound")
     .gte("created_at", windowStart)
@@ -97,7 +103,7 @@ export async function POST(req) {
     ? recentMsgs.map((m) => m.content).filter(Boolean).join("\n")
     : content
 
-  console.log(`[worker] Invocando agente con ${recentMsgs?.length ?? 1} mensaje(s) — conv=${conversation_id}`)
+  console.log(`[worker] INVOKING agente con ${recentMsgs?.length ?? 1} msg(s): "${combinedText.slice(0, 80)}" — conv=${conversation_id}`)
 
   // 5. Limpiar fila de debounce
   await supabase
@@ -118,7 +124,7 @@ async function invokeAgent(conversationId, messageText, waId) {
   if (!baseUrl && process.env.VERCEL_URL) baseUrl = `https://${process.env.VERCEL_URL}`
   if (!baseUrl) baseUrl = "http://localhost:3000"
 
-  console.log(`[worker] Llamando agent-reply → ${baseUrl}/API/agent-reply`)
+  console.log(`[worker] → agent-reply baseUrl=${baseUrl}`)
 
   const res = await fetch(`${baseUrl}/API/agent-reply`, {
     method:  "POST",
@@ -127,12 +133,12 @@ async function invokeAgent(conversationId, messageText, waId) {
   })
 
   if (!res.ok) {
-    console.error("[worker] agent-reply error:", res.status)
+    console.error("[worker] agent-reply error:", res.status, await res.text().catch(() => ""))
     return
   }
 
   const result = await res.json()
-  console.log(`[worker] agent-reply action: ${result.action}`)
+  console.log(`[worker] agent-reply action=${result.action}`)
 
   if (result.action === "escalate") {
     await supabase.from("conversations").update({ mode: "agent" }).eq("id", conversationId)
@@ -150,7 +156,6 @@ async function invokeAgent(conversationId, messageText, waId) {
   }
 
   if (result.action === "reply" && result.text) {
-    const phone         = "+" + waId
     const token         = process.env.WHATSAPP_TOKEN
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
     const version       = process.env.META_GRAPH_VERSION || "v23.0"

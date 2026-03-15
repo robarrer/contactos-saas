@@ -5,6 +5,9 @@
     },
     "app/API/agent-reply/route.js": {
       "maxDuration": 60
+    },
+    "app/API/webhook/whatsapp/route.js": {
+      "maxDuration": 30
     }
   }
 }
