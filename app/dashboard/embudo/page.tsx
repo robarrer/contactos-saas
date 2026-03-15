@@ -1,15 +1,15 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { supabase } from "@/app/lib/supabase"
 import {
   AGENTS,
-  MOCK_CONTACTS,
-  MOCK_CONVERSATIONS,
   PIPELINE_STAGES,
   type BotStatus,
   type Channel,
   type Conversation,
+  type MockContact,
   type PipelineStage,
 } from "../soporte/mockData"
 
@@ -104,9 +104,13 @@ type Filters = {
   status: "all" | "bot" | "human" | "unassigned"
 }
 
-function useFilteredConversations(conversations: Conversation[], filters: Filters) {
+function useFilteredConversations(
+  conversations: Conversation[],
+  contacts: MockContact[],
+  filters: Filters
+) {
   return conversations.filter((conv) => {
-    const contact = MOCK_CONTACTS.find((c) => c.id === conv.contactId)
+    const contact = contacts.find((c) => c.id === conv.contactId)
     if (!contact) return false
     if (filters.search) {
       const q = filters.search.toLowerCase()
@@ -320,10 +324,12 @@ function TopBar({
 
 function ListView({
   conversations,
+  contacts,
   onUpdate,
   onOpen,
 }: {
   conversations: Conversation[]
+  contacts: MockContact[]
   onUpdate: (c: Conversation) => void
   onOpen: (id: string) => void
 }) {
@@ -342,8 +348,8 @@ function ListView({
     let av = "", bv = ""
     if (sortCol === "lastActivityAt") { av = a.lastActivityAt; bv = b.lastActivityAt }
     if (sortCol === "contactName") {
-      av = MOCK_CONTACTS.find((c) => c.id === a.contactId)?.name ?? ""
-      bv = MOCK_CONTACTS.find((c) => c.id === b.contactId)?.name ?? ""
+      av = contacts.find((c) => c.id === a.contactId)?.name ?? ""
+      bv = contacts.find((c) => c.id === b.contactId)?.name ?? ""
     }
     if (sortCol === "pipelineStage") { av = a.pipelineStage; bv = b.pipelineStage }
     if (sortCol === "botStatus") { av = a.botStatus; bv = b.botStatus }
@@ -431,7 +437,7 @@ function ListView({
         </thead>
         <tbody>
           {sorted.map((conv) => {
-            const contact = MOCK_CONTACTS.find((c) => c.id === conv.contactId)!
+            const contact = contacts.find((c) => c.id === conv.contactId)
             const agent = AGENTS.find((a) => a.id === conv.assignedAgentId)
             const isSelected = selected.has(conv.id)
             const hasUnread = conv.unreadCount > 0
@@ -454,10 +460,10 @@ function ListView({
                 <td style={td}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <div style={{ position: "relative" }}>
-                      <Avatar name={contact.name} color={contactColor(contact.id)} size={32} />
+                      <Avatar name={contact?.name ?? "?"} color={contactColor(contact?.id ?? conv.contactId)} size={32} />
                       {hasUnread && <span style={{ position: "absolute", top: -2, right: -2, width: 8, height: 8, borderRadius: "50%", background: "#22c55e", border: "1.5px solid white" }} />}
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: hasUnread ? 700 : 500, color: "#111827" }}>{contact.name}</span>
+                    <span style={{ fontSize: 13, fontWeight: hasUnread ? 700 : 500, color: "#111827" }}>{contact?.name ?? "Contacto"}</span>
                   </div>
                 </td>
                 <td style={{ ...td, maxWidth: 220 }}>
@@ -515,11 +521,13 @@ function ListView({
 
 function EmbudoView({
   conversations,
+  contacts,
   stages,
   onUpdate,
   onOpen,
 }: {
   conversations: Conversation[]
+  contacts: MockContact[]
   stages: StageConfig[]
   onUpdate: (c: Conversation) => void
   onOpen: (id: string) => void
@@ -572,6 +580,7 @@ function EmbudoView({
                 <KanbanCard
                   key={conv.id}
                   conv={conv}
+                  contact={contacts.find((c) => c.id === conv.contactId)}
                   stages={stages}
                   isDragging={draggingId === conv.id}
                   onDragStart={(e) => handleDragStart(e, conv.id)}
@@ -589,9 +598,10 @@ function EmbudoView({
 }
 
 function KanbanCard({
-  conv, stages, isDragging, onDragStart, onDragEnd, onUpdate, onOpen,
+  conv, contact, stages, isDragging, onDragStart, onDragEnd, onUpdate, onOpen,
 }: {
   conv: Conversation
+  contact: MockContact | undefined
   stages: StageConfig[]
   isDragging: boolean
   onDragStart: (e: React.DragEvent) => void
@@ -600,7 +610,6 @@ function KanbanCard({
   onOpen: (id: string) => void
 }) {
   const [hovered, setHovered] = useState(false)
-  const contact = MOCK_CONTACTS.find((c) => c.id === conv.contactId)!
   const agent = AGENTS.find((a) => a.id === conv.assignedAgentId)
   const hasUnread = conv.unreadCount > 0
 
@@ -623,10 +632,10 @@ function KanbanCard({
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <div style={{ position: "relative" }}>
-          <Avatar name={contact.name} color={contactColor(contact.id)} size={30} />
+          <Avatar name={contact?.name ?? "?"} color={contactColor(contact?.id ?? conv.contactId)} size={30} />
           {hasUnread && <span style={{ position: "absolute", top: -2, right: -2, width: 8, height: 8, borderRadius: "50%", background: "#22c55e", border: "1.5px solid white" }} />}
         </div>
-        <span style={{ fontWeight: hasUnread ? 700 : 600, fontSize: 13, flex: 1, color: "#111827" }}>{contact.name}</span>
+        <span style={{ fontWeight: hasUnread ? 700 : 600, fontSize: 13, flex: 1, color: "#111827" }}>{contact?.name ?? "Contacto"}</span>
         <ChannelIcon channel={conv.channel} size={13} />
       </div>
 
@@ -854,22 +863,92 @@ function EmptyState() {
   )
 }
 
+// ─── Hook Supabase ────────────────────────────────────────────────────────────
+
+function useEmbudoData() {
+  const [conversations, setConversations] = useState<Conversation[]>([])
+  const [contacts, setContacts]           = useState<MockContact[]>([])
+  const [loading, setLoading]             = useState(true)
+
+  const load = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("*, contacts(id, name, phone, email, company, status, created_at)")
+      .eq("status", "open")
+      .order("last_activity", { ascending: false })
+
+    if (error) { console.error("[embudo]", error.message); return }
+
+    const convs: Conversation[] = []
+    const ctcts: MockContact[]  = []
+    const seen = new Set<string>()
+
+    for (const row of data ?? []) {
+      convs.push({
+        id:              row.id,
+        contactId:       row.contact_id,
+        channel:         (row.channel as Conversation["channel"]) ?? "whatsapp",
+        botStatus:       row.mode === "bot" ? "bot" : "human",
+        assignedAgentId: row.assigned_agent ?? null,
+        pipelineStage:   (row.pipeline_stage as Conversation["pipelineStage"]) ?? "Nuevo contacto",
+        unreadCount:     row.unread_count ?? 0,
+        lastMessage:     row.last_message ?? "",
+        lastActivityAt:  row.last_activity,
+        tags:            [],
+      })
+      if (row.contacts && !seen.has(row.contact_id)) {
+        const c = row.contacts as { id: string; name: string; phone: string | null; created_at: string }
+        ctcts.push({ id: c.id, name: c.name, phone: c.phone ?? undefined, channels: ["whatsapp"], createdAt: c.created_at, totalConversations: 1 })
+        seen.add(row.contact_id)
+      }
+    }
+    setConversations(convs)
+    setContacts(ctcts)
+    setLoading(false)
+  }, [])
+
+  async function updateConversation(id: string, updates: { pipeline_stage?: string; assigned_agent?: string | null }) {
+    await supabase.from("conversations").update(updates).eq("id", id)
+    setConversations((prev) => prev.map((c) => {
+      if (c.id !== id) return c
+      return {
+        ...c,
+        ...(updates.pipeline_stage && { pipelineStage: updates.pipeline_stage as Conversation["pipelineStage"] }),
+        ...(updates.assigned_agent !== undefined && { assignedAgentId: updates.assigned_agent }),
+      }
+    }))
+  }
+
+  useEffect(() => {
+    load()
+    const ch = supabase.channel("embudo-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, load)
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [load])
+
+  return { conversations, contacts, loading, updateConversation, setConversations }
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function EmbudoPage() {
   const router = useRouter()
-  const [view, setView] = useState<"lista" | "embudo">("lista")
-  const [conversations, setConversations] = useState<Conversation[]>(MOCK_CONVERSATIONS)
+  const { conversations, contacts, loading, updateConversation, setConversations } = useEmbudoData()
+  const [view, setView] = useState<"lista" | "embudo">("embudo")
   const [stages, setStages] = useState<StageConfig[]>(DEFAULT_STAGES)
   const [showStageManager, setShowStageManager] = useState(false)
   const [filters, setFilters] = useState<Filters>({
     search: "", channel: "all", agentId: "all", stages: [], status: "all",
   })
 
-  const filtered = useFilteredConversations(conversations, filters)
+  const filtered = useFilteredConversations(conversations, contacts, filters)
 
-  function onUpdate(updated: Conversation) {
-    setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+  async function onUpdate(updated: Conversation) {
+    await updateConversation(updated.id, {
+      pipeline_stage: updated.pipelineStage,
+      assigned_agent: updated.assignedAgentId,
+    })
   }
 
   function onOpen(convId: string) {
@@ -889,10 +968,14 @@ export default function EmbudoPage() {
       />
 
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {view === "lista" ? (
-          <ListView conversations={filtered} onUpdate={onUpdate} onOpen={onOpen} />
+        {loading ? (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 14 }}>
+            Cargando conversaciones…
+          </div>
+        ) : view === "lista" ? (
+          <ListView conversations={filtered} contacts={contacts} onUpdate={onUpdate} onOpen={onOpen} />
         ) : (
-          <EmbudoView conversations={filtered} stages={stages} onUpdate={onUpdate} onOpen={onOpen} />
+          <EmbudoView conversations={filtered} contacts={contacts} stages={stages} onUpdate={onUpdate} onOpen={onOpen} />
         )}
       </div>
 
