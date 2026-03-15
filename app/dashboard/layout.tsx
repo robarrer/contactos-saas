@@ -133,12 +133,12 @@ export default function DashboardLayout({
               borderRadius: 10,
               background: "rgba(255,255,255,0.04)",
             }}
-            title={collapsed ? "Soporte" : undefined}
+            title={collapsed ? "Chat" : undefined}
           >
             <span aria-hidden="true" style={{ width: 18, textAlign: "center" }}>
               💬
             </span>
-            {!collapsed && <span>Soporte</span>}
+            {!collapsed && <span>Chat</span>}
           </a>
 
           <a
