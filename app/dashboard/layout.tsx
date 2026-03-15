@@ -10,7 +10,7 @@ export default function DashboardLayout({
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
-  const isFullscreen = pathname === "/dashboard/soporte" || pathname === "/dashboard/embudo"
+  const isFullscreen = pathname === "/dashboard/soporte" || pathname === "/dashboard/embudo" || pathname === "/dashboard/contacts"
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
