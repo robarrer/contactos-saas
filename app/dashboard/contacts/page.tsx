@@ -12,6 +12,35 @@ type Contact = {
   status: string
 }
 
+type MetaTemplate = {
+  name: string
+  status: string
+  category: string
+  language: string | { code?: string }
+  components?: Array<{
+    type: string
+    text?: string | { body?: string }
+    buttons?: Array<{ type: string; text?: string; url?: string }>
+  }>
+}
+
+function getComponentText(comp: { text?: string | { body?: string } } | undefined): string {
+  if (!comp?.text) return ""
+  return typeof comp.text === "string" ? comp.text : comp.text?.body ?? ""
+}
+
+function countTemplateVariables(template: MetaTemplate): number {
+  const bodyComp = template.components?.find((c) => c.type.toUpperCase() === "BODY")
+  const text = getComponentText(bodyComp)
+  const matches = text.match(/\{\{\d+\}\}/g)
+  return matches ? matches.length : 0
+}
+
+function buildParametersForContact(contact: Contact, varCount: number): string[] {
+  const pool = [contact.name, contact.email, contact.phone, contact.company, contact.status]
+  return Array.from({ length: varCount }, (_, i) => pool[i] ?? `variable_${i + 1}`)
+}
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [loading, setLoading] = useState(true)
@@ -31,6 +60,14 @@ export default function ContactsPage() {
 
   const [showForm, setShowForm] = useState(false)
   const modalCardRef = useRef<HTMLDivElement>(null)
+
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  const [availableTemplates, setAvailableTemplates] = useState<MetaTemplate[]>([])
+  const [loadingTemplates, setLoadingTemplates] = useState(false)
+  const [sendingTemplate, setSendingTemplate] = useState<string | null>(null)
+
+  const csvInputRef = useRef<HTMLInputElement>(null)
+  const [importingCsv, setImportingCsv] = useState(false)
 
   async function loadContacts() {
     setLoading(true)
@@ -143,27 +180,64 @@ export default function ContactsPage() {
     setShowForm(true)
   }
 
-  async function sendSelectedContacts() {
+  async function openTemplatePicker() {
+    setShowTemplatePicker(true)
+    setLoadingTemplates(true)
+
+    try {
+      const res = await fetch("/API/list-templates")
+      const data = await res.json()
+      if (res.ok) {
+        setAvailableTemplates(data?.templates ?? [])
+      } else {
+        alert(data?.error ?? "Error cargando plantillas")
+        setShowTemplatePicker(false)
+      }
+    } catch {
+      alert("Error de red al cargar plantillas")
+      setShowTemplatePicker(false)
+    } finally {
+      setLoadingTemplates(false)
+    }
+  }
+
+  async function sendWithTemplate(template: MetaTemplate) {
     const selectedIds = allContactIds.filter((id) => selectedContactIds.has(id))
     const selectedContacts = contacts.filter(
       (c) => c.id && selectedIds.includes(c.id)
     )
-    const phones = selectedContacts
-      .map((c) => c.phone)
-      .filter((phone) => !!phone && phone.trim().length > 0)
 
-    if (phones.length === 0) {
+    const validContacts = selectedContacts.filter(
+      (c) => c.phone && c.phone.trim().length > 0
+    )
+
+    if (validContacts.length === 0) {
       alert("Los contactos seleccionados no tienen teléfono válido.")
       return
     }
 
+    const varCount = countTemplateVariables(template)
+    const lang =
+      typeof template.language === "string"
+        ? template.language
+        : template.language?.code ?? "en_US"
+
+    const recipients = validContacts.map((c) => ({
+      phone: c.phone,
+      parameters: varCount > 0 ? buildParametersForContact(c, varCount) : [],
+    }))
+
+    setSendingTemplate(template.name)
+
     try {
       const res = await fetch("/API/send-whatsapp", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ phones }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_name: template.name,
+          template_language: lang,
+          recipients,
+        }),
       })
 
       if (!res.ok) {
@@ -175,10 +249,21 @@ export default function ContactsPage() {
 
       const data = await res.json().catch(() => null)
       console.log("Respuesta de send-whatsapp:", data)
-      alert(`Se intentó enviar WhatsApp a ${phones.length} contacto(s).`)
+
+      const okCount = data?.results?.filter((r: { ok: boolean }) => r.ok).length ?? 0
+      const failCount = (data?.results?.length ?? 0) - okCount
+
+      alert(
+        `Plantilla "${template.name}" enviada.\n` +
+          `Exitosos: ${okCount} · Con error: ${failCount}`
+      )
+
+      setShowTemplatePicker(false)
     } catch (error) {
-      console.error("Error llamando a /api/send-whatsapp:", error)
+      console.error("Error llamando a /API/send-whatsapp:", error)
       alert("Error de red al intentar enviar el WhatsApp.")
+    } finally {
+      setSendingTemplate(null)
     }
   }
 
@@ -205,6 +290,84 @@ export default function ContactsPage() {
     }
 
     setSelectedContactIds(new Set())
+    loadContacts()
+  }
+
+  async function handleCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Limpiar el input para permitir volver a subir el mismo archivo
+    e.target.value = ""
+
+    const text = await file.text()
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0)
+
+    if (lines.length < 2) {
+      alert("El archivo CSV debe tener al menos una fila de encabezado y un contacto.")
+      return
+    }
+
+    const EXPECTED_HEADERS = ["name", "email", "phone", "company", "status"]
+
+    // Detectar separador (coma o punto y coma)
+    const sep = lines[0].includes(";") ? ";" : ","
+    const headers = lines[0].split(sep).map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ""))
+
+    const missingCols = EXPECTED_HEADERS.filter((h) => !headers.includes(h))
+    if (missingCols.length > 0) {
+      alert(
+        `El CSV le faltan las columnas: ${missingCols.join(", ")}.\n` +
+          `Columnas esperadas: ${EXPECTED_HEADERS.join(", ")}`
+      )
+      return
+    }
+
+    const dataRows = lines.slice(1)
+    const parsed: Contact[] = []
+    const skipped: number[] = []
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const cols = dataRows[i].split(sep).map((c) => c.trim().replace(/^"|"$/g, ""))
+      const row: Record<string, string> = {}
+      headers.forEach((h, idx) => { row[h] = cols[idx] ?? "" })
+
+      if (!row.name || !row.email || !row.phone) {
+        skipped.push(i + 2) // +2: línea 1 = header, base 1
+        continue
+      }
+
+      parsed.push({
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        company: row.company ?? "",
+        status: row.status ?? "",
+      })
+    }
+
+    if (parsed.length === 0) {
+      alert("No se encontraron filas válidas en el CSV (se requiere al menos name, email y phone).")
+      return
+    }
+
+    setImportingCsv(true)
+
+    const { error } = await supabase.from("contacts").insert(parsed)
+
+    setImportingCsv(false)
+
+    if (error) {
+      console.error("Error importando CSV:", error)
+      alert("Error importando contactos: " + error.message)
+      return
+    }
+
+    let msg = `Se importaron ${parsed.length} contacto(s) correctamente.`
+    if (skipped.length > 0) {
+      msg += `\n${skipped.length} fila(s) omitidas por datos incompletos (líneas: ${skipped.slice(0, 10).join(", ")}${skipped.length > 10 ? "…" : ""}).`
+    }
+    alert(msg)
     loadContacts()
   }
 
@@ -250,8 +413,133 @@ export default function ContactsPage() {
     loadContacts()
   }
 
+  useEffect(() => {
+    if (!showTemplatePicker) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowTemplatePicker(false)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [showTemplatePicker])
+
   return (
     <div>
+      {showTemplatePicker && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Elegir plantilla"
+          style={modalOverlayStyle}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowTemplatePicker(false)
+          }}
+        >
+          <div
+            style={{
+              ...modalCardStyle,
+              width: "min(600px, 100%)",
+              maxHeight: "80vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div style={modalHeaderStyle}>
+              <h2 style={{ margin: 0, fontSize: 18 }}>Elegir plantilla para enviar</h2>
+              <button
+                type="button"
+                onClick={() => setShowTemplatePicker(false)}
+                style={modalCloseButtonStyle}
+                aria-label="Cerrar"
+              >
+                ×
+              </button>
+            </div>
+
+            <p style={{ margin: "0 0 12px", fontSize: 13, color: "#6b7280" }}>
+              Se enviará a {selectedContactIds.size} contacto(s) seleccionado(s).
+              Las variables se llenarán con los datos de cada contacto (nombre, correo,
+              teléfono, empresa, status). Si no hay suficientes, se usarán valores de ejemplo.
+            </p>
+
+            {loadingTemplates ? (
+              <p style={{ color: "#6b7280", textAlign: "center", padding: 24 }}>
+                Cargando plantillas…
+              </p>
+            ) : availableTemplates.length === 0 ? (
+              <p style={{ color: "#6b7280", textAlign: "center", padding: 24 }}>
+                No hay plantillas disponibles.
+              </p>
+            ) : (
+              <div style={{ overflow: "auto", flex: 1 }}>
+                {availableTemplates.map((t) => {
+                  const bodyComp = t.components?.find(
+                    (c) => c.type.toUpperCase() === "BODY"
+                  )
+                  const bodyText = getComponentText(bodyComp)
+                  const varCount = countTemplateVariables(t)
+                  const lang =
+                    typeof t.language === "string"
+                      ? t.language
+                      : t.language?.code ?? ""
+
+                  return (
+                    <div
+                      key={`${t.name}-${lang}`}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "12px 0",
+                        borderBottom: "1px solid #f3f4f6",
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+                          {t.name}
+                        </div>
+                        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
+                          {t.category} · {lang}
+                          {varCount > 0 && ` · ${varCount} variable(s)`}
+                        </div>
+                        {bodyText && (
+                          <div
+                            style={{
+                              fontSize: 13,
+                              color: "#4b5563",
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {bodyText}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={sendingTemplate !== null}
+                        onClick={() => sendWithTemplate(t)}
+                        style={{
+                          ...primaryButtonStyle,
+                          flexShrink: 0,
+                          fontSize: 13,
+                          padding: "8px 14px",
+                          opacity: sendingTemplate !== null ? 0.6 : 1,
+                          cursor: sendingTemplate !== null ? "wait" : "pointer",
+                        }}
+                      >
+                        {sendingTemplate === `${t.name}` ? "Enviando…" : "Enviar"}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div
         style={{
           display: "flex",
@@ -265,7 +553,7 @@ export default function ContactsPage() {
         <div style={{ display: "flex", gap: 10 }}>
           <button
             type="button"
-            onClick={sendSelectedContacts}
+            onClick={openTemplatePicker}
             disabled={selectedContactIds.size === 0}
             style={{
               display: "inline-flex",
@@ -380,6 +668,69 @@ export default function ContactsPage() {
                 strokeLinejoin="round"
               />
             </svg>
+          </button>
+
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            style={{ display: "none" }}
+            onChange={handleCsvImport}
+          />
+          <button
+            type="button"
+            onClick={() => csvInputRef.current?.click()}
+            disabled={importingCsv}
+            title="Cargar contactos desde un archivo CSV"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 7,
+              background: importingCsv ? "#e5e7eb" : "white",
+              color: importingCsv ? "#6b7280" : "#111827",
+              border: "1px solid #d1d5db",
+              padding: "10px 14px",
+              borderRadius: "8px",
+              cursor: importingCsv ? "wait" : "pointer",
+            }}
+          >
+            {importingCsv ? (
+              "Importando…"
+            ) : (
+              <>
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 16L12 8"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M9 11L12 8L15 11"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M4 16V19C4 19.5523 4.44772 20 5 20H19C19.5523 20 20 19.5523 20 19V16"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                CSV
+              </>
+            )}
           </button>
 
           <button
