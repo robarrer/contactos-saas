@@ -796,9 +796,19 @@ function ChatPanel({
                 {formatDateSeparator(group.msgs[0].timestamp)}
               </span>
             </div>
-            {group.msgs.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
-            ))}
+            {groupConsecutive(group.msgs).map((cluster) =>
+              cluster.map((msg, idx) => (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  hideAvatar={idx < cluster.length - 1}
+                  hideTime={idx < cluster.length - 1}
+                  isFirst={idx === 0}
+                  isLast={idx === cluster.length - 1}
+                  clusterSize={cluster.length}
+                />
+              ))
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
@@ -1004,7 +1014,43 @@ function ChatPanel({
   )
 }
 
-function MessageBubble({ message }: { message: Message }) {
+// Agrupa mensajes consecutivos del mismo remitente en el mismo minuto
+function groupConsecutive(msgs: Message[]): Message[][] {
+  const clusters: Message[][] = []
+  for (const msg of msgs) {
+    if (msg.isInternal) { clusters.push([msg]); continue }
+    const last = clusters[clusters.length - 1]
+    if (!last) { clusters.push([msg]); continue }
+    const prev = last[last.length - 1]
+    if (
+      prev.isInternal ||
+      prev.sender !== msg.sender ||
+      (prev.sender === "agent" && prev.agentId !== msg.agentId) ||
+      Math.floor(new Date(prev.timestamp).getTime() / 60000) !== Math.floor(new Date(msg.timestamp).getTime() / 60000)
+    ) {
+      clusters.push([msg])
+    } else {
+      last.push(msg)
+    }
+  }
+  return clusters
+}
+
+function MessageBubble({
+  message,
+  hideAvatar = false,
+  hideTime = false,
+  isFirst = true,
+  isLast = true,
+  clusterSize = 1,
+}: {
+  message: Message
+  hideAvatar?: boolean
+  hideTime?: boolean
+  isFirst?: boolean
+  isLast?: boolean
+  clusterSize?: number
+}) {
   const isContact = message.sender === "contact"
   const isBot = message.sender === "bot"
   const isAgent = message.sender === "agent"
@@ -1041,36 +1087,61 @@ function MessageBubble({ message }: { message: Message }) {
     )
   }
 
+  // Border radius adaptado a posición dentro del cluster
+  // Lado "punta": el último mensaje del grupo tiene la punta (radio pequeño)
+  // Los intermedios son redondeados en todos los lados con radio uniforme
+  const isLeft = isContact || isBot
+  const r = {
+    top:    isFirst ? 16 : 4,
+    bottom: isLast  ? 16 : 4,
+  }
+  const bubbleRadius = isLeft
+    ? `${r.top}px ${r.top}px ${isLast ? 4 : r.bottom}px ${r.bottom}px`
+    : `${r.top}px ${r.top}px ${r.bottom}px ${isLast ? 4 : r.bottom}px`
+
   return (
     <div
       style={{
         display: "flex",
-        flexDirection: isContact || isBot ? "row" : "row-reverse",
+        flexDirection: isLeft ? "row" : "row-reverse",
         alignItems: "flex-end",
         gap: 6,
-        margin: "3px 0",
+        marginTop: isFirst && clusterSize > 1 ? 6 : 1,
+        marginBottom: isLast ? 2 : 0,
       }}
     >
-      {(isContact || isBot) && (
-        <div style={{ width: 28, height: 28, borderRadius: "50%", background: isBot ? "#e0e7ff" : "#e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>
+      {/* Avatar: solo visible en el último del cluster (o si es único) */}
+      {isLeft && (
+        <div style={{
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          background: isBot ? "#e0e7ff" : "#e5e7eb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 14,
+          flexShrink: 0,
+          visibility: hideAvatar ? "hidden" : "visible",
+        }}>
           {isBot ? "🤖" : "👤"}
         </div>
       )}
 
       <div style={{ maxWidth: "72%", minWidth: 0 }}>
-        {isBot && (
+        {/* Etiqueta de remitente: solo en el primero del cluster */}
+        {isFirst && isBot && (
           <span style={{ fontSize: 10, color: "#6366f1", fontWeight: 600, display: "block", marginBottom: 2, marginLeft: 4 }}>
             Bot
           </span>
         )}
-        {isAgent && agent && (
+        {isFirst && isAgent && agent && (
           <span style={{ fontSize: 10, color: agent.color, fontWeight: 600, display: "block", marginBottom: 2, marginRight: 4, textAlign: "right" }}>
             {agent.name}
           </span>
         )}
 
         {isTemplate ? (
-          /* Burbuja especial para plantillas */
           <div
             title={new Date(message.timestamp).toLocaleString("es-CL")}
             style={{
@@ -1081,14 +1152,12 @@ function MessageBubble({ message }: { message: Message }) {
               boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
             }}
           >
-            {/* Badge de plantilla */}
             <div style={{ background: "#dcfce7", padding: "5px 12px", display: "flex", alignItems: "center", gap: 5, borderBottom: "1px solid #bbf7d0" }}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
               <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 Plantilla · {message.templateName}
               </span>
             </div>
-            {/* Contenido */}
             <div style={{ padding: "9px 13px", fontSize: 13, lineHeight: 1.5, wordBreak: "break-word", whiteSpace: "pre-wrap", color: "#166534" }}>
               {message.templateRendered ?? message.text ?? message.templateName}
             </div>
@@ -1100,7 +1169,7 @@ function MessageBubble({ message }: { message: Message }) {
               background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb",
               color: isAgent ? "white" : "#111827",
               padding: "9px 13px",
-              borderRadius: isContact || isBot ? "16px 16px 16px 4px" : "16px 16px 4px 16px",
+              borderRadius: bubbleRadius,
               fontSize: 13,
               lineHeight: 1.5,
               wordBreak: "break-word",
@@ -1111,18 +1180,22 @@ function MessageBubble({ message }: { message: Message }) {
             {message.text}
           </div>
         )}
-        <div
-          style={{
-            fontSize: 10,
-            color: "#9ca3af",
-            marginTop: 2,
-            textAlign: isAgent ? "right" : "left",
-            paddingLeft: isContact || isBot ? 4 : 0,
-            paddingRight: isAgent ? 4 : 0,
-          }}
-        >
-          {formatTime(message.timestamp)}
-        </div>
+
+        {/* Timestamp: solo en el último del cluster */}
+        {!hideTime && (
+          <div
+            style={{
+              fontSize: 10,
+              color: "#9ca3af",
+              marginTop: 2,
+              textAlign: isAgent ? "right" : "left",
+              paddingLeft: isLeft ? 4 : 0,
+              paddingRight: isAgent ? 4 : 0,
+            }}
+          >
+            {formatTime(message.timestamp)}
+          </div>
+        )}
       </div>
     </div>
   )
