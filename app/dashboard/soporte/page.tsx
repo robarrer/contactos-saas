@@ -561,12 +561,16 @@ function ChatPanel({
   messages,
   onUpdateConversation,
   onSendMessage,
+  showContactPanel,
+  onToggleContactPanel,
 }: {
   conversation: Conversation
   contact: MockContact
   messages: Message[]
   onUpdateConversation: (updated: Conversation) => void
   onSendMessage?: (text: string, isInternal: boolean) => Promise<boolean>
+  showContactPanel?: boolean
+  onToggleContactPanel?: () => void
 }) {
   const [inputText, setInputText] = useState("")
   const [isInternal, setIsInternal] = useState(false)
@@ -767,6 +771,31 @@ function ChatPanel({
 
         {/* Ventana 24h Meta */}
         <MetaWindowTimer channel={conversation.channel} lastInboundAt={conversation.lastInboundAt} />
+
+        {/* Toggle panel contacto */}
+        {onToggleContactPanel && (
+          <button
+            onClick={onToggleContactPanel}
+            title={showContactPanel ? "Ocultar info del contacto" : "Ver info del contacto"}
+            style={{
+              marginLeft: 4,
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              border: "1px solid #e5e7eb",
+              background: showContactPanel ? "#eff6ff" : "#f9fafb",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={showContactPanel ? "#2563eb" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -1207,10 +1236,12 @@ function ContactInfoPanel({
   contact,
   conversation,
   onUpdateConversation,
+  onTogglePanel,
 }: {
   contact: MockContact
   conversation: Conversation
   onUpdateConversation: (c: Conversation) => void
+  onTogglePanel?: () => void
 }) {
   const [tag, setTag] = useState("")
   const [localTags, setLocalTags] = useState(conversation.tags)
@@ -1233,7 +1264,33 @@ function ContactInfoPanel({
   return (
     <div style={{ padding: "16px 14px", overflowY: "auto", height: "100%" }}>
       {/* Contact header */}
-      <div style={{ textAlign: "center", marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #f3f4f6" }}>
+      <div style={{ textAlign: "center", marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid #f3f4f6", position: "relative" }}>
+        {/* Botón cerrar */}
+        {onTogglePanel && (
+          <button
+            onClick={onTogglePanel}
+            title="Cerrar panel"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              width: 26,
+              height: 26,
+              borderRadius: "50%",
+              border: "1px solid #e5e7eb",
+              background: "#f9fafb",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </button>
+        )}
         <Avatar name={contact.name} color={contactColor(contact.id)} size={56} />
         <div style={{ marginTop: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{contact.name}</div>
@@ -1398,6 +1455,7 @@ export default function SoportePage() {
   } = useSupabaseInbox()
 
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
+  const [showContactPanel, setShowContactPanel] = useState(true)
 
   async function handleSelectConversation(id: string) {
     setActiveConvId(id)
@@ -1431,6 +1489,7 @@ export default function SoportePage() {
         gap: 0,
         overflow: "hidden",
         background: "#f9fafb",
+        position: "relative",
       }}
     >
       {/* Left panel */}
@@ -1476,6 +1535,8 @@ export default function SoportePage() {
             messages={activeMessages}
             onUpdateConversation={handleUpdateConversation}
             onSendMessage={handleSendMessage}
+            showContactPanel={showContactPanel}
+            onToggleContactPanel={() => setShowContactPanel((v) => !v)}
           />
         ) : (
           <div
@@ -1498,13 +1559,14 @@ export default function SoportePage() {
       {/* Right panel */}
       <div
         style={{
-          width: 260,
+          width: showContactPanel ? 260 : 0,
           flexShrink: 0,
           background: "white",
-          borderLeft: "1px solid #e5e7eb",
+          borderLeft: showContactPanel ? "1px solid #e5e7eb" : "none",
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
+          transition: "width 0.2s ease",
         }}
       >
         {activeConv && activeContact ? (
@@ -1513,6 +1575,7 @@ export default function SoportePage() {
             contact={activeContact}
             conversation={activeConv}
             onUpdateConversation={handleUpdateConversation}
+            onTogglePanel={() => setShowContactPanel(false)}
           />
         ) : (
           <div
