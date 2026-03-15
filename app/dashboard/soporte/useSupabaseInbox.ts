@@ -94,9 +94,6 @@ function mapContact(db: DbContact): MockContact {
 
 // ─── Hook principal ───────────────────────────────────────────────────────────
 
-// Mapa auxiliar: conversationId → wa_contact_id (para envío por WhatsApp)
-const waContactIdMap = useRef<Record<string, string>>({})
-
 export function useSupabaseInbox() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [contacts, setContacts]           = useState<MockContact[]>([])
