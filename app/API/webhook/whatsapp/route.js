@@ -1,10 +1,12 @@
 import { createClient } from "@supabase/supabase-js"
 import crypto from "crypto"
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-)
+function getServiceClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  )
+}
 
 // ─── GET: verificación del webhook por Meta ───────────────────────────────────
 export async function GET(req) {
@@ -13,9 +15,19 @@ export async function GET(req) {
   const token     = searchParams.get("hub.verify_token")
   const challenge = searchParams.get("hub.challenge")
 
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN
+  // Verificar contra cualquier organización que tenga ese verify_token
+  const supabase = getServiceClient()
+  const { data: org } = await supabase
+    .from("organizations")
+    .select("id, whatsapp_verify_token")
+    .eq("whatsapp_verify_token", token)
+    .maybeSingle()
 
-  if (mode === "subscribe" && token === verifyToken) {
+  // Fallback a variable de entorno (para desarrollo local)
+  const envToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN
+  const valid    = mode === "subscribe" && (org !== null || token === envToken)
+
+  if (valid) {
     console.log("[webhook] Verificación exitosa")
     return new Response(challenge, { status: 200 })
   }
@@ -26,11 +38,33 @@ export async function GET(req) {
 
 // ─── POST: mensajes y eventos entrantes de Meta ───────────────────────────────
 export async function POST(req) {
-  // 1. Verificar firma HMAC-SHA256
-  const rawBody = await req.text()
+  const rawBody   = await req.text()
   const signature = req.headers.get("x-hub-signature-256") || ""
-  const appSecret = process.env.WHATSAPP_APP_SECRET
 
+  let body
+  try { body = JSON.parse(rawBody) } catch {
+    return new Response("Bad Request", { status: 400 })
+  }
+
+  const supabase = getServiceClient()
+
+  // Identificar organización por phone_number_id del payload
+  const phoneNumberId = body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id ?? null
+  let organization = null
+
+  if (phoneNumberId) {
+    const { data: org } = await supabase
+      .from("organizations")
+      .select("id, whatsapp_app_secret, whatsapp_token, whatsapp_phone_number_id, whatsapp_verify_token")
+      .eq("whatsapp_phone_number_id", phoneNumberId)
+      .maybeSingle()
+    organization = org
+  }
+
+  // Fallback: usar env vars (compatibilidad con setup de un solo tenant)
+  const appSecret = organization?.whatsapp_app_secret || process.env.WHATSAPP_APP_SECRET
+
+  // Verificar firma HMAC
   if (appSecret) {
     const expected = "sha256=" + crypto
       .createHmac("sha256", appSecret)
@@ -43,65 +77,57 @@ export async function POST(req) {
     }
   }
 
-  let body
-  try {
-    body = JSON.parse(rawBody)
-  } catch {
-    return new Response("Bad Request", { status: 400 })
-  }
+  const orgId = organization?.id ?? null
 
-  // 2. Guardar evento raw para debugging
+  // Guardar evento raw
   await supabase.from("webhook_events").insert({
-    event_type: "incoming",
-    payload: body,
-    processed: false,
+    event_type:      "incoming",
+    payload:         body,
+    processed:       false,
+    organization_id: orgId,
   }).then(({ error }) => {
     if (error) console.error("[webhook] Error guardando evento:", error.message)
   })
 
-  // 3. Procesar cada entrada
+  // Procesar entradas
   const entries = body?.entry ?? []
   for (const entry of entries) {
     for (const change of entry?.changes ?? []) {
       if (change.field !== "messages") continue
       const value = change.value
 
-      // 3a. Mensajes entrantes
       for (const msg of value?.messages ?? []) {
-        await processInboundMessage(msg, value.contacts?.[0], value.metadata)
+        await processInboundMessage(msg, value.contacts?.[0], value.metadata, orgId, supabase)
       }
 
-      // 3b. Actualizaciones de estado (entregado, leído, etc.)
       for (const status of value?.statuses ?? []) {
-        await processStatusUpdate(status)
+        await processStatusUpdate(status, supabase)
       }
     }
   }
 
-  // Meta espera siempre un 200 inmediato
   return new Response("OK", { status: 200 })
 }
 
 // ─── Procesar mensaje entrante ────────────────────────────────────────────────
-async function processInboundMessage(msg, waContact, metadata) {
-  const waId        = msg.from                         // número del contacto (sin +)
+async function processInboundMessage(msg, waContact, metadata, orgId, supabase) {
+  const waId        = msg.from
   const waMessageId = msg.id
   const timestamp   = new Date(parseInt(msg.timestamp) * 1000).toISOString()
 
-  // Deduplicar: si ya procesamos este mensaje, ignorar
+  // Deduplicar
   const { data: existing } = await supabase
     .from("messages")
     .select("id")
     .eq("wa_message_id", waMessageId)
     .maybeSingle()
-
   if (existing) return
 
-  // Extraer texto o caption según tipo de mensaje
+  // Extraer contenido
   const contentType = msg.type ?? "text"
-  let content    = null
-  let mediaUrl   = null
-  let mediaMime  = null
+  let content   = null
+  let mediaUrl  = null
+  let mediaMime = null
 
   if (contentType === "text") {
     content = msg.text?.body ?? ""
@@ -109,7 +135,6 @@ async function processInboundMessage(msg, waContact, metadata) {
     const mediaObj = msg[contentType]
     content   = mediaObj?.caption ?? null
     mediaMime = mediaObj?.mime_type ?? null
-    // La URL real se obtiene via API de Media — guardamos el media ID por ahora
     mediaUrl  = mediaObj?.id ? `media:${mediaObj.id}` : null
   } else if (contentType === "location") {
     content = `📍 ${msg.location?.name ?? ""} (${msg.location?.latitude}, ${msg.location?.longitude})`
@@ -121,19 +146,21 @@ async function processInboundMessage(msg, waContact, metadata) {
     content = JSON.stringify(msg)
   }
 
-  // Buscar o crear contacto por número de teléfono
+  // Buscar o crear contacto
   const phone = "+" + waId
-  let { data: contact } = await supabase
+  const contactQuery = supabase
     .from("contacts")
     .select("id, name")
     .eq("phone", phone)
-    .maybeSingle()
+  if (orgId) contactQuery.eq("organization_id", orgId)
+
+  let { data: contact } = await contactQuery.maybeSingle()
 
   if (!contact) {
     const displayName = waContact?.profile?.name ?? phone
     const { data: newContact, error } = await supabase
       .from("contacts")
-      .insert({ name: displayName, phone })
+      .insert({ name: displayName, phone, organization_id: orgId })
       .select("id, name")
       .single()
 
@@ -144,8 +171,8 @@ async function processInboundMessage(msg, waContact, metadata) {
     contact = newContact
   }
 
-  // Buscar o crear conversación activa para este contacto/canal
-  let { data: conversation } = await supabase
+  // Buscar o crear conversación
+  const convQuery = supabase
     .from("conversations")
     .select("id, unread_count")
     .eq("contact_id", contact.id)
@@ -153,7 +180,9 @@ async function processInboundMessage(msg, waContact, metadata) {
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
-    .maybeSingle()
+  if (orgId) convQuery.eq("organization_id", orgId)
+
+  let { data: conversation } = await convQuery.maybeSingle()
 
   if (!conversation) {
     const { data: newConv, error } = await supabase
@@ -169,6 +198,7 @@ async function processInboundMessage(msg, waContact, metadata) {
         last_activity:   timestamp,
         last_inbound_at: timestamp,
         unread_count:    1,
+        organization_id: orgId,
       })
       .select("id, unread_count")
       .single()
@@ -179,7 +209,6 @@ async function processInboundMessage(msg, waContact, metadata) {
     }
     conversation = newConv
   } else {
-    // Actualizar conversación existente
     await supabase
       .from("conversations")
       .update({
@@ -194,6 +223,7 @@ async function processInboundMessage(msg, waContact, metadata) {
   // Insertar mensaje
   const { error: msgError } = await supabase.from("messages").insert({
     conversation_id: conversation.id,
+    organization_id: orgId,
     direction:       "inbound",
     sender_type:     "contact",
     sender_name:     waContact?.profile?.name ?? phone,
@@ -211,31 +241,20 @@ async function processInboundMessage(msg, waContact, metadata) {
     return
   }
 
-  console.log(`[webhook] Mensaje guardado: ${waId} → conv ${conversation.id}`)
+  console.log(`[webhook] Mensaje guardado: ${waId} → conv ${conversation.id} org=${orgId}`)
 
-  // Invocar worker de debounce en fire-and-forget (sin await)
-  // El worker espera el tiempo configurado y luego invoca al agente IA
+  // Invocar worker (fire-and-forget)
   if (contentType === "text" && content) {
-    scheduleWorker(conversation.id, content, waId, timestamp)
+    scheduleWorker(conversation.id, content, waId, timestamp, orgId)
   }
-
-  // Marcar evento como procesado
-  await supabase
-    .from("webhook_events")
-    .update({ processed: true })
-    .eq("payload->>id", msg.id)
-    .then(() => {})
 }
 
-// ─── Llamar al worker de debounce (fire-and-forget) ──────────────────────────
-
-function scheduleWorker(conversationId, content, waId, messageTimestamp) {
+// ─── Llamar al worker en fire-and-forget ─────────────────────────────────────
+function scheduleWorker(conversationId, content, waId, messageTimestamp, organizationId) {
   let baseUrl = process.env.NEXT_PUBLIC_APP_URL
   if (!baseUrl && process.env.VERCEL_URL) baseUrl = `https://${process.env.VERCEL_URL}`
   if (!baseUrl) baseUrl = "http://localhost:3000"
 
-  // Llamar al worker sin await — fire-and-forget
-  // El upsert del debounce lo hace el propio worker con await para evitar race conditions
   fetch(`${baseUrl}/API/agent-worker`, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
@@ -244,19 +263,17 @@ function scheduleWorker(conversationId, content, waId, messageTimestamp) {
       content,
       wa_id:             waId,
       message_timestamp: messageTimestamp,
+      organization_id:   organizationId,
     }),
   }).catch((e) => console.error("[webhook] Error llamando worker:", e.message))
 
-  console.log(`[webhook] Worker llamado para conv=${conversationId}`)
+  console.log(`[webhook] Worker llamado para conv=${conversationId} org=${organizationId}`)
 }
 
 // ─── Actualizar estado de mensaje saliente ────────────────────────────────────
-async function processStatusUpdate(status) {
-  const waMessageId = status.id
-  const newStatus   = status.status  // sent | delivered | read | failed
-
+async function processStatusUpdate(status, supabase) {
   await supabase
     .from("messages")
-    .update({ status: newStatus })
-    .eq("wa_message_id", waMessageId)
+    .update({ status: status.status })
+    .eq("wa_message_id", status.id)
 }

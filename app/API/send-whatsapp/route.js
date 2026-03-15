@@ -1,30 +1,62 @@
 import { createClient } from "@supabase/supabase-js"
+import { createSupabaseServerClient } from "@/app/lib/supabase-server"
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-)
+function getServiceClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  )
+}
 
 export async function POST(req) {
-  const token         = process.env.WHATSAPP_TOKEN
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "786386161226350"
-  const version       = process.env.META_GRAPH_VERSION || "v22.0"
-  const url           = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`
-
   try {
-    const body             = await req.json()
+    const body = await req.json()
+
     const recipients       = Array.isArray(body?.recipients) ? body.recipients : []
     const templateName     = body?.template_name
     const templateLanguage = body?.template_language || "en_US"
-    const templateRendered = body?.template_rendered ?? null  // texto ya renderizado para guardar en DB
+    const templateRendered = body?.template_rendered ?? null
 
     if (!recipients.length) {
-      return Response.json({ error: "No se recibieron destinatarios para enviar." }, { status: 400 })
+      return Response.json({ error: "No se recibieron destinatarios." }, { status: 400 })
     }
     if (!templateName) {
       return Response.json({ error: "No se indicó template_name." }, { status: 400 })
     }
 
+    // Obtener organización del usuario autenticado (sesión del browser)
+    let orgId = null
+    let waToken         = process.env.WHATSAPP_TOKEN
+    let waPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "786386161226350"
+
+    try {
+      const serverClient = await createSupabaseServerClient()
+      const { data: { user } } = await serverClient.auth.getUser()
+      if (user) {
+        const supabase = getServiceClient()
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("organization_id")
+          .eq("id", user.id)
+          .maybeSingle()
+
+        if (profile?.organization_id) {
+          orgId = profile.organization_id
+          const { data: org } = await supabase
+            .from("organizations")
+            .select("whatsapp_token, whatsapp_phone_number_id")
+            .eq("id", orgId)
+            .maybeSingle()
+          if (org?.whatsapp_token)           waToken         = org.whatsapp_token
+          if (org?.whatsapp_phone_number_id) waPhoneNumberId = org.whatsapp_phone_number_id
+        }
+      }
+    } catch {
+      // Sin sesión activa — usar env vars (compatibilidad)
+    }
+
+    const version = process.env.META_GRAPH_VERSION || "v22.0"
+    const url     = `https://graph.facebook.com/${version}/${waPhoneNumberId}/messages`
     const results = []
 
     for (const recipient of recipients) {
@@ -49,7 +81,7 @@ export async function POST(req) {
 
       const response = await fetch(url, {
         method:  "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${waToken}`, "Content-Type": "application/json" },
         body:    JSON.stringify(payload),
       })
 
@@ -58,14 +90,14 @@ export async function POST(req) {
 
       results.push({ to: phone, status: response.status, ok: response.ok, response: data })
 
-      // Guardar en DB si el envío fue exitoso
       if (response.ok) {
         await saveTemplateMessage({
           phone,
           templateName,
           templateRendered: templateRendered ?? recipient.templateRendered ?? null,
           waMessageId,
-          status: "sent",
+          status:           "sent",
+          orgId,
         })
       }
     }
@@ -78,49 +110,48 @@ export async function POST(req) {
 
 // ─── Guardar mensaje de plantilla en Supabase ─────────────────────────────────
 
-async function saveTemplateMessage({ phone, templateName, templateRendered, waMessageId, status }) {
-  // Normalizar el teléfono (con o sin +)
+async function saveTemplateMessage({ phone, templateName, templateRendered, waMessageId, status, orgId }) {
+  const supabase = getServiceClient()
   const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`
 
-  // Buscar contacto por teléfono
-  const { data: contact } = await supabase
+  const contactQuery = supabase
     .from("contacts")
     .select("id")
     .eq("phone", normalizedPhone)
-    .maybeSingle()
+  if (orgId) contactQuery.eq("organization_id", orgId)
 
-  if (!contact) return  // sin contacto, no podemos asociar la conversación
+  const { data: contact } = await contactQuery.maybeSingle()
+  if (!contact) return
 
-  // Buscar conversación activa de WhatsApp para este contacto
-  const { data: conversation } = await supabase
+  const convQuery = supabase
     .from("conversations")
-    .select("id, last_activity")
+    .select("id")
     .eq("contact_id", contact.id)
     .eq("channel", "whatsapp")
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
-    .maybeSingle()
+  if (orgId) convQuery.eq("organization_id", orgId)
 
-  if (!conversation) return  // no hay conversación activa
+  const { data: conversation } = await convQuery.maybeSingle()
+  if (!conversation) return
 
   const now = new Date().toISOString()
 
-  // Insertar mensaje con content_type = "template"
   await supabase.from("messages").insert({
     conversation_id: conversation.id,
+    organization_id: orgId ?? null,
     direction:       "outbound",
     sender_type:     "agent",
-    sender_name:     `template:${templateName}`,   // prefijo para identificar en el mapper
+    sender_name:     `template:${templateName}`,
     content_type:    "template",
-    content:         templateRendered ?? templateName,  // texto renderizado o nombre como fallback
+    content:         templateRendered ?? templateName,
     is_internal:     false,
     wa_message_id:   waMessageId,
     status,
     created_at:      now,
   })
 
-  // Actualizar last_message de la conversación
   await supabase
     .from("conversations")
     .update({ last_message: `📋 Plantilla: ${templateName}`, last_activity: now })

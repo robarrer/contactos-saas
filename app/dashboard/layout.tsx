@@ -1,7 +1,8 @@
 "use client"
 
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { useState } from "react"
+import { createClient } from "@/app/lib/supabase"
 
 const ICO = "#38bdf8"   // celeste
 const S   = 18          // tamaño base
@@ -90,7 +91,15 @@ const NAV_ITEMS = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false)
-  const pathname = usePathname()
+  const pathname  = usePathname()
+  const router    = useRouter()
+
+  async function handleLogout() {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push("/login")
+    router.refresh()
+  }
 
   const isFullscreen =
     pathname === "/dashboard/soporte"    ||
@@ -225,6 +234,45 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </a>
             )
           })()}
+          {/* Botón cerrar sesión — al fondo del sidebar */}
+          <div style={{ marginTop: "auto", paddingTop: 12 }}>
+            <button
+              onClick={handleLogout}
+              title={collapsed ? "Cerrar sesión" : undefined}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                justifyContent: collapsed ? "center" : "flex-start",
+                padding: collapsed ? "9px 0" : "9px 10px",
+                borderRadius: 10,
+                background: "transparent",
+                border: "none",
+                color: "rgba(255,255,255,0.45)",
+                fontSize: 14,
+                cursor: "pointer",
+                transition: "background 120ms, color 120ms",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.12)"
+                ;(e.currentTarget as HTMLButtonElement).style.color = "#f87171"
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = "transparent"
+                ;(e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.45)"
+              }}
+            >
+              <span style={{ flexShrink: 0, display: "flex", alignItems: "center" }}>
+                <svg width={S} height={S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                  <polyline points="16 17 21 12 16 7"/>
+                  <line x1="21" y1="12" x2="9" y2="12"/>
+                </svg>
+              </span>
+              {!collapsed && <span>Cerrar sesión</span>}
+            </button>
+          </div>
         </nav>
       </aside>
 
