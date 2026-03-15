@@ -86,10 +86,10 @@ export async function POST(req) {
     return Response.json({ action: "escalate", reason: "keyword" })
   }
 
-  // 2. Cargar conversación para saber qué agente está asignado (si hay)
+  // 2. Cargar conversación para saber qué etapa y modo tiene
   const { data: conv } = await supabase
     .from("conversations")
-    .select("id, mode, contact_id, wa_contact_id")
+    .select("id, mode, contact_id, wa_contact_id, pipeline_stage")
     .eq("id", conversation_id)
     .single()
 
@@ -97,15 +97,36 @@ export async function POST(req) {
     return Response.json({ action: "skip", reason: "not_bot_mode" })
   }
 
-  // 3. Cargar agente activo (el primero activo, o se puede asociar por conversación más adelante)
-  const { data: agent } = await supabase
-    .from("agents")
-    .select("*")
-    .eq("active", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  // 3. Buscar agente asignado a la etapa de la conversación
+  let agent = null
+  if (conv.pipeline_stage) {
+    const { data: stageRow } = await supabase
+      .from("pipeline_stages")
+      .select("agent_id")
+      .eq("name", conv.pipeline_stage)
+      .maybeSingle()
+    if (stageRow?.agent_id) {
+      const { data: stageAgent } = await supabase
+        .from("agents")
+        .select("*")
+        .eq("id", stageRow.agent_id)
+        .eq("active", true)
+        .maybeSingle()
+      agent = stageAgent ?? null
+    }
+  }
 
+  // Fallback: primer agente activo global
+  if (!agent) {
+    const { data: fallbackAgent } = await supabase
+      .from("agents")
+      .select("*")
+      .eq("active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    agent = fallbackAgent ?? null
+  }
   if (!agent) {
     return Response.json({ action: "skip", reason: "no_active_agent" })
   }

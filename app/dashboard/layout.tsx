@@ -10,7 +10,7 @@ export default function DashboardLayout({
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
-  const isFullscreen = pathname === "/dashboard/soporte" || pathname === "/dashboard/embudo" || pathname === "/dashboard/contacts" || pathname === "/dashboard/agentes"
+  const isFullscreen = pathname === "/dashboard/soporte" || pathname === "/dashboard/embudo" || pathname === "/dashboard/contacts" || pathname === "/dashboard/agentes" || pathname === "/dashboard/plantillas" || pathname === "/dashboard/respuestas"
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
@@ -179,6 +179,44 @@ export default function DashboardLayout({
               🧩
             </span>
             {!collapsed && <span>Plantillas</span>}
+          </a>
+
+          <a
+            href="/dashboard/respuestas"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              color: "white",
+              textDecoration: "none",
+              padding: "10px 10px",
+              borderRadius: 10,
+              background: "rgba(255,255,255,0.04)",
+            }}
+            title={collapsed ? "Respuestas" : undefined}
+          >
+            <span aria-hidden="true" style={{ width: 18, textAlign: "center" }}>⚡</span>
+            {!collapsed && <span>Respuestas</span>}
+          </a>
+
+          <div style={{ height: 1, background: "rgba(255,255,255,0.08)", margin: "8px 0" }} />
+
+          <a
+            href="/dashboard/ajustes"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              color: "white",
+              textDecoration: "none",
+              padding: "10px 10px",
+              borderRadius: 10,
+              background: "rgba(255,255,255,0.04)",
+            }}
+            title={collapsed ? "Ajustes" : undefined}
+          >
+            <span aria-hidden="true" style={{ width: 18, textAlign: "center" }}>⚙️</span>
+            {!collapsed && <span>Ajustes</span>}
           </a>
         </nav>
       </aside>

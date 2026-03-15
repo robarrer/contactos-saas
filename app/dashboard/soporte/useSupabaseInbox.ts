@@ -17,6 +17,7 @@ type DbConversation = {
   unread_count: number
   last_message: string | null
   last_activity: string
+  last_inbound_at: string | null
   wa_contact_id: string | null
   created_at: string
 }
@@ -59,6 +60,7 @@ function mapConversation(db: DbConversation): Conversation {
     unreadCount:     db.unread_count ?? 0,
     lastMessage:     db.last_message ?? "",
     lastActivityAt:  db.last_activity,
+    lastInboundAt:   db.last_inbound_at ?? null,
     tags:            [],
   }
 }
@@ -70,14 +72,29 @@ function mapMessage(db: DbMessage): Message {
     bot:     "bot",
     system:  "bot",
   }
+  // Para mensajes de plantilla, content_type = "template"
+  // content guarda el texto renderizado, y sender_name puede tener el nombre de la plantilla prefijado
+  let templateName: string | undefined
+  let templateRendered: string | undefined
+  if (db.content_type === "template") {
+    // Intentamos extraer el nombre de plantilla del campo sender_name con formato "template:nombre"
+    if (db.sender_name?.startsWith("template:")) {
+      templateName = db.sender_name.replace("template:", "")
+    } else {
+      templateName = db.sender_name ?? undefined
+    }
+    templateRendered = db.content ?? undefined
+  }
   return {
-    id:             db.id,
-    conversationId: db.conversation_id,
-    sender:         senderMap[db.sender_type] ?? "bot",
-    type:           (db.content_type as Message["type"]) ?? "text",
-    text:           db.content ?? undefined,
-    isInternal:     db.is_internal,
-    timestamp:      db.created_at,
+    id:               db.id,
+    conversationId:   db.conversation_id,
+    sender:           senderMap[db.sender_type] ?? "bot",
+    type:             (db.content_type as Message["type"]) ?? "text",
+    text:             db.content ?? undefined,
+    templateName,
+    templateRendered,
+    isInternal:       db.is_internal,
+    timestamp:        db.created_at,
   }
 }
 
@@ -92,6 +109,10 @@ function mapContact(db: DbContact): MockContact {
   }
 }
 
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 20
+
 // ─── Hook principal ───────────────────────────────────────────────────────────
 
 export function useSupabaseInbox() {
@@ -99,43 +120,143 @@ export function useSupabaseInbox() {
   const [contacts, setContacts]           = useState<MockContact[]>([])
   const [messages, setMessages]           = useState<Message[]>([])
   const [loading, setLoading]             = useState(true)
+  const [loadingMore, setLoadingMore]     = useState(false)
+  const [hasMore, setHasMore]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
-  const activeConvIdRef                   = useRef<string | null>(null)
-  const waMapRef                          = useRef<Record<string, string>>({})
 
-  // ── Cargar conversaciones + contactos ─────────────────────────────────────
-  const loadConversations = useCallback(async () => {
-    const { data, error } = await supabase
+  const activeConvIdRef = useRef<string | null>(null)
+  const waMapRef        = useRef<Record<string, string>>({})
+  const pageRef         = useRef(0)
+  const searchRef       = useRef("")
+
+  // ── Cargar una página de conversaciones ──────────────────────────────────
+  const loadPage = useCallback(async (search: string, page: number, replace: boolean) => {
+    if (page === 0) replace = true
+
+    const from = page * PAGE_SIZE
+    const to   = from + PAGE_SIZE - 1
+
+    // Búsqueda en last_message directamente
+    let msgQuery = supabase
       .from("conversations")
       .select("*, contacts(id, name, phone, email, company, status, created_at)")
       .eq("status", "open")
       .order("last_activity", { ascending: false })
+      .range(from, to)
 
-    if (error) {
-      setError(error.message)
+    if (search) {
+      msgQuery = msgQuery.ilike("last_message", `%${search}%`)
+    }
+
+    // Búsqueda por nombre de contacto (query separada)
+    let contactIds: string[] = []
+    if (search) {
+      const { data: matchedContacts } = await supabase
+        .from("contacts")
+        .select("id")
+        .ilike("name", `%${search}%`)
+      contactIds = (matchedContacts ?? []).map((c: { id: string }) => c.id)
+    }
+
+    // Si hay búsqueda, también traer convs que coincidan por contact_id
+    let extraConvs: DbConversation[] = []
+    if (search && contactIds.length > 0) {
+      const { data } = await supabase
+        .from("conversations")
+        .select("*, contacts(id, name, phone, email, company, status, created_at)")
+        .eq("status", "open")
+        .in("contact_id", contactIds)
+        .order("last_activity", { ascending: false })
+        .range(0, PAGE_SIZE - 1)
+      extraConvs = (data ?? []) as DbConversation[]
+    }
+
+    const { data: msgData, error: msgError } = await msgQuery
+
+    if (msgError) {
+      setError(msgError.message)
+      if (replace) setLoading(false)
+      else setLoadingMore(false)
       return
     }
 
-    const convs: Conversation[]   = []
-    const ctcts: MockContact[]    = []
-    const seen = new Set<string>()
-
-    for (const row of data ?? []) {
-      convs.push(mapConversation(row as DbConversation))
-      // Guardar wa_contact_id para envíos salientes
-      if (row.wa_contact_id) {
-        waMapRef.current[row.id] = row.wa_contact_id
-      }
-      if (row.contacts && !seen.has(row.contact_id)) {
-        ctcts.push(mapContact(row.contacts as DbContact))
-        seen.add(row.contact_id)
+    // Unir y deduplicar por id
+    const seenIds = new Set<string>()
+    const rawRows: typeof msgData = []
+    for (const row of [...(msgData ?? []), ...extraConvs]) {
+      if (!seenIds.has(row.id)) {
+        seenIds.add(row.id)
+        rawRows.push(row)
       }
     }
 
-    setConversations(convs)
-    setContacts(ctcts)
-    setLoading(false)
+    // Ordenar por last_activity desc después de unir
+    rawRows.sort((a, b) =>
+      new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime()
+    )
+
+    const newConvs: Conversation[]  = []
+    const newContacts: MockContact[] = []
+    const seenContacts = new Set<string>()
+
+    for (const row of rawRows) {
+      newConvs.push(mapConversation(row as DbConversation))
+      if (row.wa_contact_id) waMapRef.current[row.id] = row.wa_contact_id
+      if (row.contacts && !seenContacts.has(row.contact_id)) {
+        newContacts.push(mapContact(row.contacts as DbContact))
+        seenContacts.add(row.contact_id)
+      }
+    }
+
+    // Determinar si hay más páginas (solo aplica sin búsqueda o con búsqueda en last_message)
+    const returnedCount = (msgData ?? []).length
+    setHasMore(!search && returnedCount === PAGE_SIZE)
+
+    if (replace) {
+      setConversations(newConvs)
+      setContacts(newContacts)
+      setLoading(false)
+    } else {
+      setConversations((prev) => {
+        const existingIds = new Set(prev.map((c) => c.id))
+        const fresh = newConvs.filter((c) => !existingIds.has(c.id))
+        return [...prev, ...fresh]
+      })
+      setContacts((prev) => {
+        const existingIds = new Set(prev.map((c) => c.id))
+        const fresh = newContacts.filter((c) => !existingIds.has(c.id))
+        return [...prev, ...fresh]
+      })
+      setLoadingMore(false)
+    }
   }, [])
+
+  // ── Carga inicial ─────────────────────────────────────────────────────────
+  const loadConversations = useCallback(async () => {
+    pageRef.current   = 0
+    searchRef.current = ""
+    setLoading(true)
+    setHasMore(true)
+    await loadPage("", 0, true)
+  }, [loadPage])
+
+  // ── Buscar (resetea paginación) ───────────────────────────────────────────
+  const searchConversations = useCallback(async (search: string) => {
+    pageRef.current   = 0
+    searchRef.current = search
+    setLoading(true)
+    setHasMore(true)
+    await loadPage(search, 0, true)
+  }, [loadPage])
+
+  // ── Cargar siguiente página ───────────────────────────────────────────────
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    const nextPage = pageRef.current + 1
+    pageRef.current = nextPage
+    await loadPage(searchRef.current, nextPage, false)
+  }, [loadPage, loadingMore, hasMore])
 
   // ── Cargar mensajes de una conversación ───────────────────────────────────
   const loadMessages = useCallback(async (conversationId: string) => {
@@ -177,7 +298,6 @@ export function useSupabaseInbox() {
     const optimisticId = `opt-${Date.now()}`
     const now = new Date().toISOString()
 
-    // Optimistic UI
     const optimistic: Message = {
       id:             optimisticId,
       conversationId,
@@ -189,7 +309,6 @@ export function useSupabaseInbox() {
     }
     setMessages((prev) => [...prev, optimistic])
 
-    // Guardar en Supabase
     const { data, error } = await supabase
       .from("messages")
       .insert({
@@ -211,12 +330,10 @@ export function useSupabaseInbox() {
       return false
     }
 
-    // Reemplazar optimistic con el real
     setMessages((prev) =>
       prev.map((m) => (m.id === optimisticId ? mapMessage(data as DbMessage) : m))
     )
 
-    // Actualizar last_message en conversación
     await supabase
       .from("conversations")
       .update({ last_message: text, last_activity: now })
@@ -228,7 +345,6 @@ export function useSupabaseInbox() {
       )
     )
 
-    // Enviar por WhatsApp si no es nota interna
     if (!isInternal) {
       const waId = waMapRef.current[conversationId]
       if (waId) {
@@ -297,7 +413,6 @@ export function useSupabaseInbox() {
             if (prev.find((m) => m.id === newMsg.id)) return prev
             return [...prev, newMsg]
           })
-          // Actualizar conversación en la lista
           setConversations((prev) =>
             prev.map((c) => {
               if (c.id !== newMsg.conversationId) return c
@@ -337,12 +452,16 @@ export function useSupabaseInbox() {
     contacts,
     messages,
     loading,
+    loadingMore,
+    hasMore,
     error,
     activeConvIdRef,
     loadMessages,
     markAsRead,
     sendMessage,
     updateConversation,
+    searchConversations,
+    loadMore,
     setConversations,
   }
 }

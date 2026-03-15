@@ -1,6 +1,6 @@
 export type Channel = "whatsapp" | "instagram" | "facebook" | "webchat"
 export type PipelineStage = "Nuevo contacto" | "Cita agendada" | "Cerrado"
-export type MessageType = "text" | "image" | "document"
+export type MessageType = "text" | "image" | "document" | "template"
 export type MessageSender = "contact" | "agent" | "bot"
 export type BotStatus = "bot" | "human"
 
@@ -28,6 +28,8 @@ export type Message = {
   agentId?: string
   text?: string
   type: MessageType
+  templateName?: string        // nombre de la plantilla si type === "template"
+  templateRendered?: string    // texto ya renderizado con variables sustituidas
   fileName?: string
   imageUrl?: string
   isInternal: boolean
@@ -44,6 +46,7 @@ export type Conversation = {
   unreadCount: number
   lastMessage: string
   lastActivityAt: string
+  lastInboundAt: string | null
   tags: string[]
 }
 
@@ -159,147 +162,99 @@ export const MOCK_CONTACTS: MockContact[] = [
 
 export const MOCK_CONVERSATIONS: Conversation[] = [
   {
-    id: "conv-1",
-    contactId: "c1",
-    channel: "whatsapp",
-    botStatus: "human",
-    assignedAgentId: "agent-1",
-    pipelineStage: "Cita agendada",
-    unreadCount: 0,
+    id: "conv-1", contactId: "c1", channel: "whatsapp", botStatus: "human", assignedAgentId: "agent-1",
+    pipelineStage: "Cita agendada", unreadCount: 0,
     lastMessage: "Gracias, entonces nos vemos el martes a las 10:30. ¡Hasta pronto!",
     lastActivityAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
     tags: ["urgente"],
   },
   {
-    id: "conv-2",
-    contactId: "c2",
-    channel: "whatsapp",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 3,
+    id: "conv-2", contactId: "c2", channel: "whatsapp", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 3,
     lastMessage: "¿Cuánto cuesta una limpieza dental?",
     lastActivityAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-3",
-    contactId: "c3",
-    channel: "instagram",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 1,
+    id: "conv-3", contactId: "c3", channel: "instagram", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 1,
     lastMessage: "Hola, quisiera saber los horarios de atención",
     lastActivityAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-4",
-    contactId: "c4",
-    channel: "whatsapp",
-    botStatus: "human",
-    assignedAgentId: "agent-2",
-    pipelineStage: "Cita agendada",
-    unreadCount: 2,
+    id: "conv-4", contactId: "c4", channel: "whatsapp", botStatus: "human", assignedAgentId: "agent-2",
+    pipelineStage: "Cita agendada", unreadCount: 2,
     lastMessage: "Perfecto, pero ¿pueden darme una hora más temprano?",
     lastActivityAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
     tags: ["reagendar"],
   },
   {
-    id: "conv-5",
-    contactId: "c5",
-    channel: "whatsapp",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 0,
+    id: "conv-5", contactId: "c5", channel: "whatsapp", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 0,
     lastMessage: "Ok, gracias por la información 👍",
     lastActivityAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-6",
-    contactId: "c6",
-    channel: "instagram",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 4,
+    id: "conv-6", contactId: "c6", channel: "instagram", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 4,
     lastMessage: "¿Aceptan Fonasa nivel B para ortodoncia?",
     lastActivityAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     tags: ["fonasa"],
   },
   {
-    id: "conv-7",
-    contactId: "c7",
-    channel: "whatsapp",
-    botStatus: "human",
-    assignedAgentId: "agent-1",
-    pipelineStage: "Cerrado",
-    unreadCount: 0,
+    id: "conv-7", contactId: "c7", channel: "whatsapp", botStatus: "human", assignedAgentId: "agent-1",
+    pipelineStage: "Cerrado", unreadCount: 0,
     lastMessage: "Muchas gracias por la atención 😊",
     lastActivityAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-8",
-    contactId: "c8",
-    channel: "whatsapp",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 1,
+    id: "conv-8", contactId: "c8", channel: "whatsapp", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 1,
     lastMessage: "¿Dónde están ubicados?",
     lastActivityAt: new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-9",
-    contactId: "c9",
-    channel: "instagram",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Cita agendada",
-    unreadCount: 0,
+    id: "conv-9", contactId: "c9", channel: "instagram", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Cita agendada", unreadCount: 0,
     lastMessage: "Confirmado para el viernes 14 a las 16:00 ✅",
     lastActivityAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-10",
-    contactId: "c10",
-    channel: "whatsapp",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 0,
+    id: "conv-10", contactId: "c10", channel: "whatsapp", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 0,
     lastMessage: "Buenas tardes, ¿tienen disponibilidad esta semana?",
     lastActivityAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
     tags: [],
   },
   {
-    id: "conv-11",
-    contactId: "c11",
-    channel: "whatsapp",
-    botStatus: "human",
-    assignedAgentId: "agent-2",
-    pipelineStage: "Cita agendada",
-    unreadCount: 2,
+    id: "conv-11", contactId: "c11", channel: "whatsapp", botStatus: "human", assignedAgentId: "agent-2",
+    pipelineStage: "Cita agendada", unreadCount: 2,
     lastMessage: "Sí, ya pagué la reserva. ¿Me pueden enviar confirmación?",
     lastActivityAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     tags: ["pago"],
   },
   {
-    id: "conv-12",
-    contactId: "c12",
-    channel: "instagram",
-    botStatus: "bot",
-    assignedAgentId: null,
-    pipelineStage: "Nuevo contacto",
-    unreadCount: 0,
+    id: "conv-12", contactId: "c12", channel: "instagram", botStatus: "bot", assignedAgentId: null,
+    pipelineStage: "Nuevo contacto", unreadCount: 0,
     lastMessage: "Hola, ¿tienen carillas dentales?",
     lastActivityAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    lastInboundAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
     tags: [],
   },
 ]

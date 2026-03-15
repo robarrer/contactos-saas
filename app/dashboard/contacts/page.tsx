@@ -41,6 +41,14 @@ function buildParametersForContact(contact: Contact, varCount: number): string[]
   return Array.from({ length: varCount }, (_, i) => pool[i] ?? `variable_${i + 1}`)
 }
 
+function renderTemplateText(template: MetaTemplate, contact: Contact): string {
+  const bodyComp = template.components?.find((c) => c.type.toUpperCase() === "BODY")
+  let text = getComponentText(bodyComp)
+  if (!text) return template.name
+  const pool = [contact.name, contact.email, contact.phone, contact.company, contact.status]
+  return text.replace(/\{\{(\d+)\}\}/g, (_, n) => pool[parseInt(n) - 1] ?? `{{${n}}}`)
+}
+
 function initials(name: string) {
   return name.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase()
 }
@@ -197,7 +205,11 @@ export default function ContactsPage() {
     if (!selected.length) { alert("Los contactos seleccionados no tienen teléfono válido."); return }
     const varCount = countTemplateVariables(template)
     const lang = typeof template.language === "string" ? template.language : template.language?.code ?? "en_US"
-    const recipients = selected.map((c) => ({ phone: c.phone, parameters: varCount > 0 ? buildParametersForContact(c, varCount) : [] }))
+    const recipients = selected.map((c) => ({
+      phone:            c.phone,
+      parameters:       varCount > 0 ? buildParametersForContact(c, varCount) : [],
+      templateRendered: renderTemplateText(template, c),
+    }))
     setSendingTemplate(template.name)
     try {
       const res = await fetch("/API/send-whatsapp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ template_name: template.name, template_language: lang, recipients }) })

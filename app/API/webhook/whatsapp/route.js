@@ -159,15 +159,16 @@ async function processInboundMessage(msg, waContact, metadata) {
     const { data: newConv, error } = await supabase
       .from("conversations")
       .insert({
-        contact_id:     contact.id,
-        channel:        "whatsapp",
-        status:         "open",
-        mode:           "bot",
-        pipeline_stage: "Nuevo contacto",
-        wa_contact_id:  waId,
-        last_message:   content,
-        last_activity:  timestamp,
-        unread_count:   1,
+        contact_id:      contact.id,
+        channel:         "whatsapp",
+        status:          "open",
+        mode:            "bot",
+        pipeline_stage:  "Nuevo contacto",
+        wa_contact_id:   waId,
+        last_message:    content,
+        last_activity:   timestamp,
+        last_inbound_at: timestamp,
+        unread_count:    1,
       })
       .select("id, unread_count")
       .single()
@@ -182,9 +183,10 @@ async function processInboundMessage(msg, waContact, metadata) {
     await supabase
       .from("conversations")
       .update({
-        last_message:  content,
-        last_activity: timestamp,
-        unread_count:  (conversation.unread_count ?? 0) + 1,
+        last_message:    content,
+        last_activity:   timestamp,
+        last_inbound_at: timestamp,
+        unread_count:    (conversation.unread_count ?? 0) + 1,
       })
       .eq("id", conversation.id)
   }
@@ -211,14 +213,10 @@ async function processInboundMessage(msg, waContact, metadata) {
 
   console.log(`[webhook] Mensaje guardado: ${waId} → conv ${conversation.id}`)
 
-  // Invocar al agente IA si el mensaje es texto
-  // IMPORTANTE: await antes de retornar — Vercel no soporta trabajo en background
+  // Invocar worker de debounce en fire-and-forget (sin await)
+  // El worker espera el tiempo configurado y luego invoca al agente IA
   if (contentType === "text" && content) {
-    try {
-      await invokeAgent(conversation.id, content, waId)
-    } catch (e) {
-      console.error("[webhook] Error invocando agente:", e.message)
-    }
+    scheduleWorker(conversation.id, content, waId, timestamp)
   }
 
   // Marcar evento como procesado
@@ -229,100 +227,37 @@ async function processInboundMessage(msg, waContact, metadata) {
     .then(() => {})
 }
 
-// ─── Invocar agente IA y enviar respuesta ─────────────────────────────────────
-async function invokeAgent(conversationId, messageText, waId) {
-  // Construir URL base: preferir variable explícita, luego VERCEL_URL (sin https://), luego localhost
+// ─── Llamar al worker de debounce (fire-and-forget) ──────────────────────────
+
+function scheduleWorker(conversationId, content, waId, messageTimestamp) {
   let baseUrl = process.env.NEXT_PUBLIC_APP_URL
-  if (!baseUrl && process.env.VERCEL_URL) {
-    baseUrl = `https://${process.env.VERCEL_URL}`
-  }
-  if (!baseUrl) {
-    baseUrl = "http://localhost:3000"
-  }
+  if (!baseUrl && process.env.VERCEL_URL) baseUrl = `https://${process.env.VERCEL_URL}`
+  if (!baseUrl) baseUrl = "http://localhost:3000"
 
-  console.log(`[webhook] Invocando agente en: ${baseUrl}/API/agent-reply`)
-
-  // Llamar al endpoint del agente
-  const res = await fetch(`${baseUrl}/API/agent-reply`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId, message_text: messageText }),
-  })
-
-  if (!res.ok) {
-    console.error("[webhook] agent-reply error:", res.status)
-    return
-  }
-
-  const result = await res.json()
-  console.log(`[webhook] agent-reply action: ${result.action}`)
-
-  if (result.action === "escalate") {
-    // Cambiar conversación a modo humano
-    await supabase
-      .from("conversations")
-      .update({ mode: "agent" })
-      .eq("id", conversationId)
-
-    // Guardar nota interna
-    await supabase.from("messages").insert({
+  // Registrar debounce en DB antes de llamar al worker
+  supabase
+    .from("message_debounce")
+    .upsert({
       conversation_id: conversationId,
-      direction:       "outbound",
-      sender_type:     "system",
-      sender_name:     "Sistema",
-      content_type:    "text",
-      content:         `🤖 El agente IA derivó esta conversación a un humano. Motivo: ${result.reason === "keyword" ? "solicitud del usuario" : "decisión del LLM"}.`,
-      is_internal:     true,
-      status:          "sent",
+      last_message_at: messageTimestamp,
+      pending_text:    content,
+    }, { onConflict: "conversation_id" })
+    .then(() => {
+      // Llamar al worker sin await — Vercel mantiene viva la request del worker independientemente
+      fetch(`${baseUrl}/API/agent-worker`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          conversation_id:   conversationId,
+          content,
+          wa_id:             waId,
+          message_timestamp: messageTimestamp,
+        }),
+      }).catch((e) => console.error("[webhook] Error llamando worker:", e.message))
     })
+    .catch((e) => console.error("[webhook] Error guardando debounce:", e.message))
 
-    console.log(`[webhook] Conversación ${conversationId} escalada a humano`)
-    return
-  }
-
-  if (result.action === "reply" && result.text) {
-    const phone = "+" + waId
-    const token         = process.env.WHATSAPP_TOKEN
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
-    const version       = process.env.META_GRAPH_VERSION || "v23.0"
-
-    // Enviar por WhatsApp
-    const waRes = await fetch(`https://graph.facebook.com/${version}/${phoneNumberId}/messages`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type:    "individual",
-        to:                waId,
-        type:              "text",
-        text:              { preview_url: false, body: result.text },
-      }),
-    })
-
-    const waData = await waRes.json().catch(() => null)
-    const waMessageId = waData?.messages?.[0]?.id ?? null
-
-    // Guardar respuesta del bot en DB
-    await supabase.from("messages").insert({
-      conversation_id: conversationId,
-      direction:       "outbound",
-      sender_type:     "bot",
-      sender_name:     result.agent_name ?? "Bot",
-      content_type:    "text",
-      content:         result.text,
-      is_internal:     false,
-      wa_message_id:   waMessageId,
-      status:          waRes.ok ? "sent" : "failed",
-    })
-
-    // Actualizar last_message de la conversación
-    await supabase
-      .from("conversations")
-      .update({ last_message: result.text, last_activity: new Date().toISOString() })
-      .eq("id", conversationId)
-
-    console.log(`[webhook] Bot respondió a ${waId}: "${result.text.slice(0, 60)}…"`)
-  }
+  console.log(`[webhook] Worker programado para conv=${conversationId}`)
 }
 
 // ─── Actualizar estado de mensaje saliente ────────────────────────────────────

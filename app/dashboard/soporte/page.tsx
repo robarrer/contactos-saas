@@ -1,12 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { supabase } from "@/app/lib/supabase"
 import {
   AGENTS,
-  CANNED_RESPONSES,
   PIPELINE_STAGES,
   type BotStatus,
-  type CannedResponse,
   type Channel,
   type Conversation,
   type Message,
@@ -14,6 +13,13 @@ import {
   type PipelineStage,
 } from "./mockData"
 import { useSupabaseInbox } from "./useSupabaseInbox"
+
+type CannedResponse = {
+  id: string
+  category: string
+  title: string
+  content: string
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,6 +30,101 @@ function relativeTime(iso: string): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`
   if (diff < 172800) return "ayer"
   return new Date(iso).toLocaleDateString("es-CL", { day: "numeric", month: "short" })
+}
+
+// ─── Meta 24h window timer ────────────────────────────────────────────────────
+
+const WINDOW_MS = 24 * 60 * 60 * 1000 // 24 horas en ms
+
+function useMetaWindowCountdown(lastInboundAt: string | null) {
+  const [remaining, setRemaining] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!lastInboundAt) { setRemaining(null); return }
+
+    function calc() {
+      const elapsed = Date.now() - new Date(lastInboundAt!).getTime()
+      const rem = WINDOW_MS - elapsed
+      setRemaining(rem)
+    }
+
+    calc()
+    const id = setInterval(calc, 10_000) // actualiza cada 10s
+    return () => clearInterval(id)
+  }, [lastInboundAt])
+
+  return remaining
+}
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "Expirada"
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.floor((ms % 3_600_000) / 60_000)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+/**
+ * Muestra el tiempo restante de la ventana de 24h de Meta.
+ * Solo aplica a WhatsApp. No se muestra si no hay lastInboundAt.
+ */
+function MetaWindowTimer({
+  channel,
+  lastInboundAt,
+  compact = false,
+}: {
+  channel: string
+  lastInboundAt: string | null
+  compact?: boolean
+}) {
+  const remaining = useMetaWindowCountdown(lastInboundAt)
+
+  // Solo aplica a WhatsApp y si hay fecha
+  if (channel !== "whatsapp" || remaining === null) return null
+
+  const expired  = remaining <= 0
+  const critical = !expired && remaining < 2 * 3_600_000  // menos de 2h
+  const warning  = !expired && !critical && remaining < 6 * 3_600_000 // menos de 6h
+
+  const bg    = expired ? "#fef2f2" : critical ? "#fff7ed" : warning ? "#fefce8" : "#f0fdf4"
+  const color = expired ? "#dc2626" : critical ? "#ea580c" : warning ? "#ca8a04" : "#16a34a"
+  const dot   = expired ? "#dc2626" : critical ? "#ea580c" : warning ? "#eab308" : "#22c55e"
+
+  if (compact) {
+    // Versión compacta para la lista: solo un punto de color con tooltip
+    return (
+      <span
+        title={expired ? "Ventana Meta expirada" : `Ventana Meta: ${formatCountdown(remaining)}`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 3 }}
+      >
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0, display: "inline-block" }} />
+        {!expired && (
+          <span style={{ fontSize: 10, color, fontWeight: 600, lineHeight: 1 }}>
+            {formatCountdown(remaining)}
+          </span>
+        )}
+        {expired && (
+          <span style={{ fontSize: 10, color, fontWeight: 700, lineHeight: 1 }}>exp.</span>
+        )}
+      </span>
+    )
+  }
+
+  // Versión completa para el top bar del chat
+  return (
+    <span
+      title="Ventana de mensajería de Meta (WhatsApp). Tienes 24h desde el último mensaje del contacto para responder sin plantilla."
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5,
+        padding: "3px 10px", borderRadius: 20, background: bg,
+        fontSize: 12, fontWeight: 600, color, cursor: "default",
+        border: `1px solid ${color}33`,
+      }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+      {expired ? "Ventana expirada" : `⏱ ${formatCountdown(remaining)}`}
+    </span>
+  )
 }
 
 function formatTime(iso: string): string {
@@ -133,35 +234,60 @@ function ConversationList({
   contacts,
   activeId,
   onSelect,
+  loadingMore,
+  hasMore,
+  onSearch,
+  onLoadMore,
 }: {
   conversations: Conversation[]
   contacts: MockContact[]
   activeId: string | null
   onSelect: (id: string) => void
+  loadingMore: boolean
+  hasMore: boolean
+  onSearch: (q: string) => void
+  onLoadMore: () => void
 }) {
   const [search, setSearch] = useState("")
   const [tab, setTab] = useState<FilterTab>("all")
   const [channelFilter, setChannelFilter] = useState<Channel | "all">("all")
   const [stageFilter, setStageFilter] = useState<PipelineStage | "all">("all")
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Debounce: llama onSearch 400ms después del último cambio
+  function handleSearchChange(value: string) {
+    setSearch(value)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      onSearch(value)
+    }, 400)
+  }
+
+  // IntersectionObserver para scroll infinito
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMore && !loadingMore) onLoadMore()
+      },
+      { threshold: 0.1 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingMore, onLoadMore])
+
+  // Filtros locales (tab, canal, etapa) — siguen siendo en memoria sobre lo ya cargado
   const filtered = conversations.filter((c) => {
     const contact = contacts.find((ct) => ct.id === c.contactId)
     if (!contact) return false
-
-    if (search) {
-      const q = search.toLowerCase()
-      if (!contact.name.toLowerCase().includes(q) && !c.lastMessage.toLowerCase().includes(q))
-        return false
-    }
-
     if (tab === "bot" && c.botStatus !== "bot") return false
     if (tab === "human" && c.botStatus !== "human") return false
     if (tab === "unassigned" && c.assignedAgentId !== null) return false
     if (tab === "mine" && c.assignedAgentId !== "agent-1") return false
-
     if (channelFilter !== "all" && c.channel !== channelFilter) return false
     if (stageFilter !== "all" && c.pipelineStage !== stageFilter) return false
-
     return true
   })
 
@@ -192,7 +318,7 @@ function ConversationList({
           </svg>
           <input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Buscar conversaciones…"
             style={{
               width: "100%",
@@ -339,9 +465,12 @@ function ConversationList({
                   <span style={{ fontWeight: 600, fontSize: 13, color: "#111827", truncate: true } as React.CSSProperties}>
                     {contact.name}
                   </span>
-                  <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                    {relativeTime(conv.lastActivityAt)}
-                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <MetaWindowTimer channel={conv.channel} lastInboundAt={conv.lastInboundAt} compact />
+                    <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                      {relativeTime(conv.lastActivityAt)}
+                    </span>
+                  </div>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 1 }}>
@@ -406,6 +535,19 @@ function ConversationList({
             </button>
           )
         })}
+
+        {/* Scroll infinito: sentinel + indicadores */}
+        <div ref={sentinelRef} style={{ height: 1 }} />
+        {loadingMore && (
+          <p style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, padding: "8px 0" }}>
+            Cargando más…
+          </p>
+        )}
+        {!hasMore && conversations.length > 0 && (
+          <p style={{ textAlign: "center", color: "#d1d5db", fontSize: 11, padding: "8px 0" }}>
+            — fin —
+          </p>
+        )}
       </div>
     </div>
   )
@@ -430,9 +572,20 @@ function ChatPanel({
   const [isInternal, setIsInternal] = useState(false)
   const [showCanned, setShowCanned] = useState(false)
   const [cannedSearch, setCannedSearch] = useState("")
+  const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([])
   const [localMessages, setLocalMessages] = useState<Message[]>(messages)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // Cargar respuestas prediseñadas desde Supabase
+  useEffect(() => {
+    supabase
+      .from("canned_responses")
+      .select("id, category, title, content")
+      .order("category")
+      .order("title")
+      .then(({ data }) => setCannedResponses(data ?? []))
+  }, [])
 
   useEffect(() => {
     setLocalMessages(messages)
@@ -501,7 +654,7 @@ function ChatPanel({
     }
   }
 
-  const filteredCanned = CANNED_RESPONSES.filter(
+  const filteredCanned = cannedResponses.filter(
     (c) =>
       cannedSearch === "" ||
       c.title.toLowerCase().includes(cannedSearch.toLowerCase()) ||
@@ -611,6 +764,9 @@ function ChatPanel({
             👤 Tú tienes el control · <strong>Devolver al bot</strong>
           </button>
         )}
+
+        {/* Ventana 24h Meta */}
+        <MetaWindowTimer channel={conversation.channel} lastInboundAt={conversation.lastInboundAt} />
       </div>
 
       {/* Messages */}
@@ -853,6 +1009,7 @@ function MessageBubble({ message }: { message: Message }) {
   const isBot = message.sender === "bot"
   const isAgent = message.sender === "agent"
   const isNote = message.isInternal
+  const isTemplate = message.type === "template"
 
   const agent = isAgent ? AGENTS.find((a) => a.id === message.agentId) : null
 
@@ -911,22 +1068,49 @@ function MessageBubble({ message }: { message: Message }) {
             {agent.name}
           </span>
         )}
-        <div
-          title={new Date(message.timestamp).toLocaleString("es-CL")}
-          style={{
-            background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb",
-            color: isAgent ? "white" : "#111827",
-            padding: "9px 13px",
-            borderRadius: isContact || isBot ? "16px 16px 16px 4px" : "16px 16px 4px 16px",
-            fontSize: 13,
-            lineHeight: 1.5,
-            wordBreak: "break-word",
-            whiteSpace: "pre-wrap",
-            boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
-          }}
-        >
-          {message.text}
-        </div>
+
+        {isTemplate ? (
+          /* Burbuja especial para plantillas */
+          <div
+            title={new Date(message.timestamp).toLocaleString("es-CL")}
+            style={{
+              background: "#f0fdf4",
+              border: "1px solid #86efac",
+              borderRadius: "16px 16px 4px 16px",
+              overflow: "hidden",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+            }}
+          >
+            {/* Badge de plantilla */}
+            <div style={{ background: "#dcfce7", padding: "5px 12px", display: "flex", alignItems: "center", gap: 5, borderBottom: "1px solid #bbf7d0" }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Plantilla · {message.templateName}
+              </span>
+            </div>
+            {/* Contenido */}
+            <div style={{ padding: "9px 13px", fontSize: 13, lineHeight: 1.5, wordBreak: "break-word", whiteSpace: "pre-wrap", color: "#166534" }}>
+              {message.templateRendered ?? message.text ?? message.templateName}
+            </div>
+          </div>
+        ) : (
+          <div
+            title={new Date(message.timestamp).toLocaleString("es-CL")}
+            style={{
+              background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb",
+              color: isAgent ? "white" : "#111827",
+              padding: "9px 13px",
+              borderRadius: isContact || isBot ? "16px 16px 16px 4px" : "16px 16px 4px 16px",
+              fontSize: 13,
+              lineHeight: 1.5,
+              wordBreak: "break-word",
+              whiteSpace: "pre-wrap",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+            }}
+          >
+            {message.text}
+          </div>
+        )}
         <div
           style={{
             fontSize: 10,
@@ -1128,11 +1312,15 @@ export default function SoportePage() {
     contacts,
     messages,
     loading,
+    loadingMore,
+    hasMore,
     activeConvIdRef,
     loadMessages,
     markAsRead,
     sendMessage,
     updateConversation,
+    searchConversations,
+    loadMore,
     setConversations,
   } = useSupabaseInbox()
 
@@ -1197,6 +1385,10 @@ export default function SoportePage() {
             contacts={contacts}
             activeId={activeConvId}
             onSelect={handleSelectConversation}
+            loadingMore={loadingMore}
+            hasMore={hasMore}
+            onSearch={searchConversations}
+            onLoadMore={loadMore}
           />
         )}
       </div>

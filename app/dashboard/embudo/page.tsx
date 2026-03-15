@@ -84,12 +84,14 @@ type StageConfig = {
   id: string
   name: string
   color: string
+  agent_id?: string | null
 }
 
 const DEFAULT_STAGES: StageConfig[] = PIPELINE_STAGES.map((s) => ({
   id: s,
   name: s,
   color: STAGE_COLORS[s] ?? "#6b7280",
+  agent_id: null,
 }))
 
 const PRESET_COLORS = ["#6366f1","#f59e0b","#10b981","#ef4444","#0891b2","#ec4899","#8b5cf6","#f97316"]
@@ -540,12 +542,12 @@ function EmbudoView({
     e.dataTransfer.effectAllowed = "move"
   }
 
-  function handleDrop(e: React.DragEvent, stageId: string) {
+  function handleDrop(e: React.DragEvent, stageName: string) {
     e.preventDefault()
     if (!draggingId) return
     const conv = conversations.find((c) => c.id === draggingId)
-    if (conv && conv.pipelineStage !== stageId) {
-      onUpdate({ ...conv, pipelineStage: stageId as PipelineStage })
+    if (conv && conv.pipelineStage !== stageName) {
+      onUpdate({ ...conv, pipelineStage: stageName as PipelineStage })
     }
     setDraggingId(null); setOverStage(null)
   }
@@ -553,14 +555,14 @@ function EmbudoView({
   return (
     <div style={{ display: "flex", gap: 12, overflowX: "auto", overflowY: "hidden", padding: "16px 20px", flex: 1, alignItems: "stretch" }}>
       {stages.map((stage) => {
-        const cards = conversations.filter((c) => c.pipelineStage === stage.id)
-        const isOver = overStage === stage.id
+        const cards = conversations.filter((c) => c.pipelineStage === stage.name || c.pipelineStage === stage.id)
+        const isOver = overStage === stage.name
         return (
           <div
             key={stage.id}
-            onDragOver={(e) => { e.preventDefault(); setOverStage(stage.id) }}
+            onDragOver={(e) => { e.preventDefault(); setOverStage(stage.name) }}
             onDragLeave={() => setOverStage(null)}
-            onDrop={(e) => handleDrop(e, stage.id)}
+            onDrop={(e) => handleDrop(e, stage.name)}
             style={{ width: 280, flexShrink: 0, background: isOver ? "#f0f7ff" : "#f3f4f6", borderRadius: 12, border: `2px solid ${isOver ? stage.color : "transparent"}`, transition: "border-color 150ms, background 150ms", display: "flex", flexDirection: "column", overflow: "hidden" }}
           >
             {/* Column header */}
@@ -708,11 +710,13 @@ function KanbanCard({
 function StageManagerModal({
   stages,
   conversations,
+  aiAgents,
   onSave,
   onClose,
 }: {
   stages: StageConfig[]
   conversations: Conversation[]
+  aiAgents: DbAgent[]
   onSave: (stages: StageConfig[]) => void
   onClose: () => void
 }) {
@@ -784,30 +788,50 @@ function StageManagerModal({
                 cursor: "grab",
               }}
             >
-              <span style={{ color: "#9ca3af", cursor: "grab", fontSize: 16 }}>⠿</span>
-              {/* Color picker */}
-              <div style={{ display: "flex", gap: 3 }}>
-                {PRESET_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setLocal(local.map((s, i) => i === idx ? { ...s, color: c } : s))}
-                    style={{ width: 14, height: 14, borderRadius: "50%", background: c, border: stage.color === c ? "2px solid #111827" : "none", cursor: "pointer", padding: 0 }}
+              <span style={{ color: "#9ca3af", cursor: "grab", fontSize: 16, flexShrink: 0 }}>⠿</span>
+
+              {/* Color picker nativo */}
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: stage.color, border: "2px solid #e5e7eb", cursor: "pointer", overflow: "hidden", position: "relative" }}>
+                  <input
+                    type="color"
+                    value={stage.color}
+                    onChange={(e) => setLocal(local.map((s, i) => i === idx ? { ...s, color: e.target.value } : s))}
+                    style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", cursor: "pointer", padding: 0, border: "none" }}
                   />
-                ))}
+                </div>
               </div>
+
               {/* Name */}
               <input
                 value={stage.name}
                 onChange={(e) => setLocal(local.map((s, i) => i === idx ? { ...s, name: e.target.value } : s))}
-                style={{ flex: 1, border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 8px", fontSize: 13 }}
+                style={{ flex: 1, minWidth: 0, border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 8px", fontSize: 13 }}
               />
-              <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>{stageConvCount(stage.id)} conv.</span>
+
+              {/* Agent selector */}
+              <select
+                value={stage.agent_id ?? ""}
+                onChange={(e) => setLocal(local.map((s, i) => i === idx ? { ...s, agent_id: e.target.value || null } : s))}
+                title="Agente IA para esta etapa"
+                style={{ border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 6px", fontSize: 12, color: stage.agent_id ? "#111827" : "#9ca3af", width: 120, flexShrink: 0, cursor: "pointer" }}
+              >
+                <option value="">Sin agente</option>
+                {aiAgents.map((a) => (
+                  <option key={a.id} value={a.id}>🤖 {a.name}</option>
+                ))}
+              </select>
+
+              <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap", flexShrink: 0 }}>{stageConvCount(stage.id)} conv.</span>
+
               <button
                 onClick={() => { setDeleteIdx(idx); setDeleteMoveTarget(local.find((_, i) => i !== idx)?.id ?? "") }}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 16, padding: "0 4px" }}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", flexShrink: 0, padding: "0 2px", display: "flex", alignItems: "center" }}
                 title="Eliminar etapa"
               >
-                🗑
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                </svg>
               </button>
             </div>
           ))}
@@ -865,10 +889,29 @@ function EmptyState() {
 
 // ─── Hook Supabase ────────────────────────────────────────────────────────────
 
+type DbAgent = { id: string; name: string; active: boolean }
+
 function useEmbudoData() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [contacts, setContacts]           = useState<MockContact[]>([])
+  const [stages, setStages]               = useState<StageConfig[]>(DEFAULT_STAGES)
+  const [aiAgents, setAiAgents]           = useState<DbAgent[]>([])
   const [loading, setLoading]             = useState(true)
+
+  const loadStages = useCallback(async () => {
+    const { data } = await supabase
+      .from("pipeline_stages")
+      .select("id, name, color, agent_id, position")
+      .order("position", { ascending: true })
+    if (data && data.length > 0) {
+      setStages(data.map((s) => ({ id: s.id, name: s.name, color: s.color ?? "#6b7280", agent_id: s.agent_id ?? null })))
+    }
+  }, [])
+
+  const loadAgents = useCallback(async () => {
+    const { data } = await supabase.from("agents").select("id, name, active").eq("active", true).order("created_at")
+    setAiAgents(data ?? [])
+  }, [])
 
   const load = useCallback(async () => {
     const { data, error } = await supabase
@@ -907,6 +950,19 @@ function useEmbudoData() {
     setLoading(false)
   }, [])
 
+  async function saveStages(newStages: StageConfig[]) {
+    // Upsert todas las etapas con su posición y agent_id
+    const rows = newStages.map((s, i) => ({
+      id:       s.id,
+      name:     s.name,
+      color:    s.color,
+      agent_id: s.agent_id ?? null,
+      position: i,
+    }))
+    await supabase.from("pipeline_stages").upsert(rows, { onConflict: "id" })
+    setStages(newStages)
+  }
+
   async function updateConversation(id: string, updates: { pipeline_stage?: string; assigned_agent?: string | null }) {
     await supabase.from("conversations").update(updates).eq("id", id)
     setConversations((prev) => prev.map((c) => {
@@ -921,22 +977,23 @@ function useEmbudoData() {
 
   useEffect(() => {
     load()
+    loadStages()
+    loadAgents()
     const ch = supabase.channel("embudo-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, load)
       .subscribe()
     return () => { supabase.removeChannel(ch) }
-  }, [load])
+  }, [load, loadStages, loadAgents])
 
-  return { conversations, contacts, loading, updateConversation, setConversations }
+  return { conversations, contacts, stages, aiAgents, loading, updateConversation, setConversations, saveStages }
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function EmbudoPage() {
   const router = useRouter()
-  const { conversations, contacts, loading, updateConversation, setConversations } = useEmbudoData()
+  const { conversations, contacts, stages, aiAgents, loading, updateConversation, setConversations, saveStages } = useEmbudoData()
   const [view, setView] = useState<"lista" | "embudo">("embudo")
-  const [stages, setStages] = useState<StageConfig[]>(DEFAULT_STAGES)
   const [showStageManager, setShowStageManager] = useState(false)
   const [filters, setFilters] = useState<Filters>({
     search: "", channel: "all", agentId: "all", stages: [], status: "all",
@@ -983,7 +1040,8 @@ export default function EmbudoPage() {
         <StageManagerModal
           stages={stages}
           conversations={conversations}
-          onSave={(s) => setStages(s)}
+          aiAgents={aiAgents}
+          onSave={(s) => saveStages(s)}
           onClose={() => setShowStageManager(false)}
         />
       )}
