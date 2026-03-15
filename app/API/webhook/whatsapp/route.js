@@ -211,12 +211,14 @@ async function processInboundMessage(msg, waContact, metadata) {
 
   console.log(`[webhook] Mensaje guardado: ${waId} → conv ${conversation.id}`)
 
-  // Invocar al agente IA si la conversación está en modo bot y el mensaje es texto
+  // Invocar al agente IA si el mensaje es texto
+  // IMPORTANTE: await antes de retornar — Vercel no soporta trabajo en background
   if (contentType === "text" && content) {
-    // No bloqueamos — lo hacemos en background para responder a Meta rápido
-    invokeAgent(conversation.id, content, waId).catch((e) =>
+    try {
+      await invokeAgent(conversation.id, content, waId)
+    } catch (e) {
       console.error("[webhook] Error invocando agente:", e.message)
-    )
+    }
   }
 
   // Marcar evento como procesado
