@@ -9,10 +9,28 @@ type Agent = {
   description: string
   instructions: string
   active: boolean
+  llm_provider: "openai" | "anthropic"
+  llm_model: string
   created_at?: string
 }
 
-const EMPTY_AGENT: Agent = { name: "", description: "", instructions: "", active: true }
+const MODELS: Record<"openai" | "anthropic", { id: string; label: string }[]> = {
+  openai: [
+    { id: "gpt-4o",      label: "GPT-4o" },
+    { id: "gpt-4o-mini", label: "GPT-4o mini (económico)" },
+    { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
+  ],
+  anthropic: [
+    { id: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
+    { id: "claude-3-5-haiku-20241022",  label: "Claude 3.5 Haiku (económico)" },
+    { id: "claude-3-opus-20240229",     label: "Claude 3 Opus" },
+  ],
+}
+
+const EMPTY_AGENT: Agent = {
+  name: "", description: "", instructions: "", active: true,
+  llm_provider: "openai", llm_model: "gpt-4o-mini",
+}
 
 function initials(name: string) {
   return name.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase()
@@ -119,6 +137,50 @@ function AgentPanel({
           </p>
         </div>
 
+        {/* LLM Provider */}
+        <div>
+          <label style={labelStyle}>Proveedor de IA</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["openai", "anthropic"] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => upd({ llm_provider: p, llm_model: MODELS[p][0].id })}
+                style={{
+                  flex: 1, padding: "9px 12px", borderRadius: 8, cursor: "pointer",
+                  border: `2px solid ${form.llm_provider === p ? "#2563eb" : "#e5e7eb"}`,
+                  background: form.llm_provider === p ? "#eff6ff" : "white",
+                  color: form.llm_provider === p ? "#1d4ed8" : "#374151",
+                  fontWeight: form.llm_provider === p ? 700 : 400,
+                  fontSize: 13, transition: "all 150ms",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                }}
+              >
+                {p === "openai" ? "🟢 OpenAI" : "🟣 Anthropic"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* LLM Model */}
+        <div>
+          <label style={labelStyle}>Modelo</label>
+          <select
+            value={form.llm_model}
+            onChange={(e) => upd({ llm_model: e.target.value })}
+            style={{ ...inputStyle, cursor: "pointer" }}
+          >
+            {MODELS[form.llm_provider].map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+          <p style={hintStyle}>
+            {form.llm_provider === "openai"
+              ? "Requiere OPENAI_API_KEY en las variables de entorno."
+              : "Requiere ANTHROPIC_API_KEY en las variables de entorno."}
+          </p>
+        </div>
+
         {/* Activo */}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
@@ -176,7 +238,7 @@ export default function AgentesPage() {
 
   async function handleSave(form: Agent) {
     setSaving(true)
-    const payload = { name: form.name.trim(), description: form.description.trim(), instructions: form.instructions.trim(), active: form.active }
+    const payload = { name: form.name.trim(), description: form.description.trim(), instructions: form.instructions.trim(), active: form.active, llm_provider: form.llm_provider, llm_model: form.llm_model }
 
     const { error } = form.id
       ? await supabase.from("agents").update(payload).eq("id", form.id)
