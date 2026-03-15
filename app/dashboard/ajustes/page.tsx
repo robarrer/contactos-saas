@@ -469,7 +469,6 @@ function UsuariosTab() {
       </div>
 
       {/* Table */}
-      <div style={{ padding: "20px 24px" }}>
         {loading ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: "#9ca3af", fontSize: 14 }}>
             Cargando usuarios…
@@ -566,7 +565,6 @@ function UsuariosTab() {
             </table>
           </div>
         )}
-      </div>
 
       {/* Modal crear / editar */}
       {showForm && (
