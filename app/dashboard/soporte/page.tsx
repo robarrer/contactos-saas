@@ -4,9 +4,6 @@ import { useEffect, useRef, useState } from "react"
 import {
   AGENTS,
   CANNED_RESPONSES,
-  MOCK_CONTACTS,
-  MOCK_CONVERSATIONS,
-  MOCK_MESSAGES,
   PIPELINE_STAGES,
   type BotStatus,
   type CannedResponse,
@@ -16,6 +13,7 @@ import {
   type MockContact,
   type PipelineStage,
 } from "./mockData"
+import { useSupabaseInbox } from "./useSupabaseInbox"
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -420,11 +418,13 @@ function ChatPanel({
   contact,
   messages,
   onUpdateConversation,
+  onSendMessage,
 }: {
   conversation: Conversation
   contact: MockContact
   messages: Message[]
   onUpdateConversation: (updated: Conversation) => void
+  onSendMessage?: (text: string, isInternal: boolean) => Promise<boolean>
 }) {
   const [inputText, setInputText] = useState("")
   const [isInternal, setIsInternal] = useState(false)
@@ -442,22 +442,28 @@ function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [localMessages])
 
-  function sendMessage() {
+  async function sendMessage() {
     const text = inputText.trim()
     if (!text) return
-    const msg: Message = {
-      id: `new-${Date.now()}`,
-      conversationId: conversation.id,
-      sender: "agent",
-      agentId: "agent-1",
-      type: "text",
-      text,
-      isInternal,
-      timestamp: new Date().toISOString(),
-    }
-    setLocalMessages((prev) => [...prev, msg])
     setInputText("")
     inputRef.current?.focus()
+
+    if (onSendMessage) {
+      await onSendMessage(text, isInternal)
+    } else {
+      // fallback local (mock)
+      const msg: Message = {
+        id: `new-${Date.now()}`,
+        conversationId: conversation.id,
+        sender: "agent",
+        agentId: "agent-1",
+        type: "text",
+        text,
+        isInternal,
+        timestamp: new Date().toISOString(),
+      }
+      setLocalMessages((prev) => [...prev, msg])
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -964,12 +970,8 @@ function ContactInfoPanel({
     setLocalTags((prev) => prev.filter((x) => x !== t))
   }
 
-  const convMessages = MOCK_MESSAGES.filter((m) => m.conversationId === conversation.id)
-  const openSince = relativeTime(
-    MOCK_MESSAGES.filter((m) => m.conversationId === conversation.id).sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    )[0]?.timestamp ?? conversation.lastActivityAt
-  )
+  const convMessages: Message[] = []
+  const openSince = relativeTime(conversation.lastActivityAt)
 
   return (
     <div style={{ padding: "16px 14px", overflowY: "auto", height: "100%" }}>
@@ -1121,24 +1123,44 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SoportePage() {
-  const [conversations, setConversations] = useState<Conversation[]>(MOCK_CONVERSATIONS)
+  const {
+    conversations,
+    contacts,
+    messages,
+    loading,
+    activeConvIdRef,
+    loadMessages,
+    markAsRead,
+    sendMessage,
+    updateConversation,
+    setConversations,
+  } = useSupabaseInbox()
+
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
 
-  function handleSelectConversation(id: string) {
+  async function handleSelectConversation(id: string) {
     setActiveConvId(id)
-    // Mark as read
-    setConversations((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c))
-    )
+    activeConvIdRef.current = id
+    await markAsRead(id)
+    await loadMessages(id)
   }
 
-  const activeConv = conversations.find((c) => c.id === activeConvId)
-  const activeContact = activeConv
-    ? MOCK_CONTACTS.find((c) => c.id === activeConv.contactId)
-    : null
-  const activeMessages = activeConvId
-    ? MOCK_MESSAGES.filter((m) => m.conversationId === activeConvId)
-    : []
+  async function handleUpdateConversation(updated: Conversation) {
+    await updateConversation(updated.id, {
+      pipeline_stage: updated.pipelineStage,
+      assigned_agent: updated.assignedAgentId,
+      mode:           updated.botStatus === "bot" ? "bot" : "agent",
+    })
+  }
+
+  async function handleSendMessage(text: string, isInternal: boolean) {
+    if (!activeConvId) return false
+    return sendMessage(activeConvId, text, isInternal, "Agente")
+  }
+
+  const activeConv    = conversations.find((c) => c.id === activeConvId)
+  const activeContact = activeConv ? contacts.find((c) => c.id === activeConv.contactId) : null
+  const activeMessages = messages.filter((m) => m.conversationId === activeConvId)
 
   return (
     <div
@@ -1165,12 +1187,18 @@ export default function SoportePage() {
         <div style={{ padding: "14px 12px 0", borderBottom: "1px solid #f3f4f6" }}>
           <h2 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 700 }}>Mesa de soporte</h2>
         </div>
-        <ConversationList
-          conversations={conversations}
-          contacts={MOCK_CONTACTS}
-          activeId={activeConvId}
-          onSelect={handleSelectConversation}
-        />
+        {loading ? (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 13 }}>
+            Cargando conversaciones…
+          </div>
+        ) : (
+          <ConversationList
+            conversations={conversations}
+            contacts={contacts}
+            activeId={activeConvId}
+            onSelect={handleSelectConversation}
+          />
+        )}
       </div>
 
       {/* Center panel */}
@@ -1181,9 +1209,8 @@ export default function SoportePage() {
             conversation={activeConv}
             contact={activeContact}
             messages={activeMessages}
-            onUpdateConversation={(updated) =>
-              setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
-            }
+            onUpdateConversation={handleUpdateConversation}
+            onSendMessage={handleSendMessage}
           />
         ) : (
           <div
@@ -1220,9 +1247,7 @@ export default function SoportePage() {
             key={activeConvId}
             contact={activeContact}
             conversation={activeConv}
-            onUpdateConversation={(updated) =>
-              setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
-            }
+            onUpdateConversation={handleUpdateConversation}
           />
         ) : (
           <div
