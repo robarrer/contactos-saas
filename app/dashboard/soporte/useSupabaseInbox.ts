@@ -94,6 +94,9 @@ function mapContact(db: DbContact): MockContact {
 
 // ─── Hook principal ───────────────────────────────────────────────────────────
 
+// Mapa auxiliar: conversationId → wa_contact_id (para envío por WhatsApp)
+const waContactIdMap = useRef<Record<string, string>>({})
+
 export function useSupabaseInbox() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [contacts, setContacts]           = useState<MockContact[]>([])
@@ -101,6 +104,7 @@ export function useSupabaseInbox() {
   const [loading, setLoading]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
   const activeConvIdRef                   = useRef<string | null>(null)
+  const waMapRef                          = useRef<Record<string, string>>({})
 
   // ── Cargar conversaciones + contactos ─────────────────────────────────────
   const loadConversations = useCallback(async () => {
@@ -121,6 +125,10 @@ export function useSupabaseInbox() {
 
     for (const row of data ?? []) {
       convs.push(mapConversation(row as DbConversation))
+      // Guardar wa_contact_id para envíos salientes
+      if (row.wa_contact_id) {
+        waMapRef.current[row.id] = row.wa_contact_id
+      }
       if (row.contacts && !seen.has(row.contact_id)) {
         ctcts.push(mapContact(row.contacts as DbContact))
         seen.add(row.contact_id)
@@ -176,7 +184,7 @@ export function useSupabaseInbox() {
     const optimistic: Message = {
       id:             optimisticId,
       conversationId,
-      sender:         isInternal ? "agent" : "agent",
+      sender:         "agent",
       type:           "text",
       text,
       isInternal,
@@ -201,8 +209,7 @@ export function useSupabaseInbox() {
       .single()
 
     if (error) {
-      console.error("[inbox] Error enviando mensaje:", error.message)
-      // Revertir optimistic
+      console.error("[inbox] Error guardando mensaje:", error.message)
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId))
       return false
     }
@@ -223,6 +230,29 @@ export function useSupabaseInbox() {
         c.id === conversationId ? { ...c, lastMessage: text, lastActivityAt: now } : c
       )
     )
+
+    // Enviar por WhatsApp si no es nota interna
+    if (!isInternal) {
+      const waId = waMapRef.current[conversationId]
+      if (waId) {
+        const phone = waId.startsWith("+") ? waId : `+${waId}`
+        try {
+          const res = await fetch("/API/send-text-whatsapp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone, text }),
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            console.error("[inbox] Error enviando WhatsApp:", err)
+          }
+        } catch (e) {
+          console.error("[inbox] Error de red al enviar WhatsApp:", e)
+        }
+      } else {
+        console.warn("[inbox] No hay wa_contact_id para conversación:", conversationId)
+      }
+    }
 
     return true
   }, [])
