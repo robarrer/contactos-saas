@@ -937,6 +937,7 @@ function useEmbudoData() {
         unreadCount:     row.unread_count ?? 0,
         lastMessage:     row.last_message ?? "",
         lastActivityAt:  row.last_activity,
+        lastInboundAt:   row.last_inbound_at ?? null,
         tags:            [],
       })
       if (row.contacts && !seen.has(row.contact_id)) {
