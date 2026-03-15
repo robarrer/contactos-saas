@@ -5,7 +5,7 @@ import { supabase } from "@/app/lib/supabase"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = "respuestas" | "bot"
+type Tab = "respuestas" | "bot" | "usuarios"
 
 type SettingKey = "message_debounce_seconds"
 type Settings = { message_debounce_seconds: number }
@@ -53,7 +53,8 @@ export default function AjustesPage() {
         <div style={{ display: "flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
           {([
             { id: "respuestas", label: "Respuestas predefinidas" },
-            { id: "bot",        label: "Comportamiento del bot" },
+            { id: "bot",        label: "Comportamiento del bot"  },
+            { id: "usuarios",   label: "Usuarios"                },
           ] as { id: Tab; label: string }[]).map((t) => (
             <button
               key={t.id}
@@ -81,6 +82,7 @@ export default function AjustesPage() {
       <div style={{ flex: 1, overflow: "auto" }}>
         {tab === "respuestas" && <RespuestasTab />}
         {tab === "bot"        && <BotTab />}
+        {tab === "usuarios"   && <UsuariosTab />}
       </div>
     </div>
   )
@@ -378,6 +380,234 @@ function BotTab() {
         </div>
       </div>
     </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB: Usuarios
+// ══════════════════════════════════════════════════════════════════════════════
+
+type User = { id: string; email: string; full_name: string; role: string }
+
+const EMPTY_USER = { email: "", password: "", full_name: "", role: "admin" }
+
+const ROLES = [
+  { value: "admin", label: "Administrador" },
+  { value: "agent", label: "Agente"        },
+]
+
+function UsuariosTab() {
+  const [users, setUsers]       = useState<User[]>([])
+  const [loading, setLoading]   = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [form, setForm]         = useState(EMPTY_USER)
+  const [saving, setSaving]     = useState(false)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [error, setError]       = useState<string | null>(null)
+  const emailRef = useRef<HTMLInputElement>(null)
+
+  async function load() {
+    setLoading(true)
+    const res = await fetch("/API/admin/users")
+    const data = await res.json()
+    setUsers(data.users ?? [])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+  useEffect(() => { if (showForm) setTimeout(() => emailRef.current?.focus(), 50) }, [showForm])
+  useEffect(() => {
+    if (!showForm && !deleteId) return
+    const fn = (e: KeyboardEvent) => { if (e.key === "Escape") { setShowForm(false); setDeleteId(null) } }
+    window.addEventListener("keydown", fn)
+    return () => window.removeEventListener("keydown", fn)
+  }, [showForm, deleteId])
+
+  function openNew() {
+    setEditingId(null); setForm(EMPTY_USER); setError(null); setShowForm(true)
+  }
+  function openEdit(u: User) {
+    setEditingId(u.id); setForm({ email: u.email, password: "", full_name: u.full_name, role: u.role }); setError(null); setShowForm(true)
+  }
+
+  async function handleSave() {
+    setError(null)
+    if (!editingId && !form.email.trim()) { setError("El email es obligatorio"); return }
+    if (!editingId && !form.password.trim()) { setError("La contraseña es obligatoria"); return }
+    setSaving(true)
+
+    const res = await fetch("/API/admin/users", {
+      method:  editingId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(editingId ? { id: editingId, full_name: form.full_name, role: form.role, password: form.password || undefined } : form),
+    })
+    const data = await res.json()
+    setSaving(false)
+    if (!res.ok) { setError(data.error ?? "Error desconocido"); return }
+    setShowForm(false); load()
+  }
+
+  async function handleDelete(id: string) {
+    await fetch("/API/admin/users", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) })
+    setDeleteId(null); load()
+  }
+
+  const roleLabel = (r: string) => ROLES.find((x) => x.value === r)?.label ?? r
+
+  return (
+    <>
+      {/* Sub-toolbar */}
+      <div style={{ padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid #f3f4f6", background: "white" }}>
+        <span style={{ fontSize: 13, color: "#6b7280" }}>
+          {loading ? "Cargando…" : `${users.length} ${users.length === 1 ? "usuario" : "usuarios"}`}
+        </span>
+        <button onClick={openNew}
+          style={{ padding: "7px 16px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "none", background: "#111827", color: "white", cursor: "pointer" }}>
+          + Nuevo usuario
+        </button>
+      </div>
+
+      {/* Table */}
+      <div style={{ padding: "20px 24px" }}>
+        {loading ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 160, color: "#9ca3af", fontSize: 14 }}>Cargando usuarios…</div>
+        ) : users.length === 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 160, color: "#9ca3af", gap: 8 }}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="9" cy="7" r="4"/><path d="M2 21c0-4 3.1-7 7-7s7 3 7 7"/>
+              <circle cx="19" cy="9" r="2.5"/><path d="M22 21c0-2.5-1.5-4.5-3-5"/>
+            </svg>
+            <p style={{ margin: 0, fontSize: 14 }}>No hay usuarios todavía</p>
+            <button onClick={openNew} style={{ fontSize: 13, color: "#2563eb", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Crear el primero</button>
+          </div>
+        ) : (
+          <div style={{ background: "white", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #f3f4f6", background: "#f9fafb" }}>
+                  {["Usuario", "Email", "Rol", ""].map((h) => (
+                    <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 12, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u, i) => (
+                  <tr key={u.id} style={{ borderBottom: i < users.length - 1 ? "1px solid #f3f4f6" : "none" }}>
+                    <td style={{ padding: "12px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#e0e7ff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#4f46e5", flexShrink: 0 }}>
+                          {(u.full_name || u.email).slice(0, 1).toUpperCase()}
+                        </div>
+                        <span style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>{u.full_name || <span style={{ color: "#9ca3af", fontWeight: 400 }}>Sin nombre</span>}</span>
+                      </div>
+                    </td>
+                    <td style={{ padding: "12px 16px", fontSize: 13, color: "#6b7280" }}>{u.email}</td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, background: u.role === "admin" ? "#eff6ff" : "#f0fdf4", color: u.role === "admin" ? "#2563eb" : "#16a34a" }}>
+                        {roleLabel(u.role)}
+                      </span>
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button onClick={() => openEdit(u)}
+                          style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 6, border: "1px solid #e5e7eb", background: "white", cursor: "pointer", fontSize: 12, color: "#374151", fontWeight: 500 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                          Editar
+                        </button>
+                        <button onClick={() => setDeleteId(u.id)}
+                          style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 6, border: "1px solid #fecaca", background: "#fef2f2", cursor: "pointer", fontSize: 12, color: "#ef4444", fontWeight: 500 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                          Eliminar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Modal crear / editar */}
+      {showForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setShowForm(false) }}>
+          <div style={{ width: "min(480px, 100%)", background: "white", borderRadius: 14, border: "1px solid #e5e7eb", boxShadow: "0 20px 60px rgba(0,0,0,0.18)", display: "flex", flexDirection: "column" }}>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #e5e7eb" }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{editingId ? "Editar usuario" : "Nuevo usuario"}</h2>
+              <button onClick={() => setShowForm(false)} style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid #e5e7eb", background: "white", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+            </div>
+
+            <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+
+              {!editingId && (
+                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <span style={labelStyle}>Email <span style={{ color: "#ef4444" }}>*</span></span>
+                  <input ref={emailRef} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="usuario@email.com" style={inputStyle} />
+                </label>
+              )}
+
+              <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <span style={labelStyle}>{editingId ? "Nueva contraseña" : "Contraseña"} {!editingId && <span style={{ color: "#ef4444" }}>*</span>}</span>
+                <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={editingId ? "Dejar vacío para no cambiar" : "Mínimo 6 caracteres"} style={inputStyle} />
+                {editingId && <span style={{ fontSize: 11, color: "#9ca3af" }}>Dejar vacío para mantener la contraseña actual</span>}
+              </label>
+
+              <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <span style={labelStyle}>Nombre completo</span>
+                <input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} placeholder="Nombre del usuario" style={inputStyle} />
+              </label>
+
+              <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <span style={labelStyle}>Rol</span>
+                <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}
+                  style={{ ...inputStyle, cursor: "pointer", background: "white" }}>
+                  {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>Por ahora todos los roles tienen acceso completo</span>
+              </label>
+
+              {error && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "9px 12px", fontSize: 13, color: "#dc2626" }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  {error}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "12px 20px", borderTop: "1px solid #e5e7eb" }}>
+              <button onClick={() => setShowForm(false)} style={{ padding: "7px 16px", fontSize: 13, borderRadius: 8, border: "1px solid #e5e7eb", background: "white", cursor: "pointer" }}>Cancelar</button>
+              <button onClick={handleSave} disabled={saving}
+                style={{ padding: "7px 16px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "none", background: saving ? "#9ca3af" : "#111827", color: "white", cursor: saving ? "wait" : "pointer" }}>
+                {saving ? "Guardando…" : editingId ? "Guardar cambios" : "Crear usuario"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal confirmar eliminación */}
+      {deleteId && (() => {
+        const u = users.find((x) => x.id === deleteId)
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 }}
+            onMouseDown={(e) => { if (e.target === e.currentTarget) setDeleteId(null) }}>
+            <div style={{ width: "min(400px, 100%)", background: "white", borderRadius: 14, border: "1px solid #e5e7eb", boxShadow: "0 20px 60px rgba(0,0,0,0.18)", padding: 24 }}>
+              <h2 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700 }}>¿Eliminar usuario?</h2>
+              <p style={{ margin: "0 0 4px", fontSize: 14, color: "#6b7280" }}>Se eliminará permanentemente:</p>
+              <p style={{ margin: "0 0 20px", fontSize: 14, fontWeight: 600, color: "#111827" }}>{u?.full_name || u?.email}</p>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button onClick={() => setDeleteId(null)} style={{ padding: "7px 16px", fontSize: 13, borderRadius: 8, border: "1px solid #e5e7eb", background: "white", cursor: "pointer" }}>Cancelar</button>
+                <button onClick={() => handleDelete(deleteId)} style={{ padding: "7px 16px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "none", background: "#ef4444", color: "white", cursor: "pointer" }}>Eliminar</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+    </>
   )
 }
 
