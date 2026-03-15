@@ -229,9 +229,16 @@ async function processInboundMessage(msg, waContact, metadata) {
 
 // ─── Invocar agente IA y enviar respuesta ─────────────────────────────────────
 async function invokeAgent(conversationId, messageText, waId) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000"
+  // Construir URL base: preferir variable explícita, luego VERCEL_URL (sin https://), luego localhost
+  let baseUrl = process.env.NEXT_PUBLIC_APP_URL
+  if (!baseUrl && process.env.VERCEL_URL) {
+    baseUrl = `https://${process.env.VERCEL_URL}`
+  }
+  if (!baseUrl) {
+    baseUrl = "http://localhost:3000"
+  }
+
+  console.log(`[webhook] Invocando agente en: ${baseUrl}/API/agent-reply`)
 
   // Llamar al endpoint del agente
   const res = await fetch(`${baseUrl}/API/agent-reply`, {
