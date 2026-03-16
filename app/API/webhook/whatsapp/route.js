@@ -251,9 +251,17 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
 
 // ─── Llamar al worker en fire-and-forget ─────────────────────────────────────
 function scheduleWorker(conversationId, content, waId, messageTimestamp, organizationId) {
-  let baseUrl = process.env.NEXT_PUBLIC_APP_URL
-  if (!baseUrl && process.env.VERCEL_URL) baseUrl = `https://${process.env.VERCEL_URL}`
-  if (!baseUrl) baseUrl = "http://localhost:3000"
+  // Prioridad: producción Vercel > deployment Vercel > APP_URL (si no es localhost) > localhost
+  let baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : null
+
+  if (!baseUrl) {
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
+    baseUrl = appUrl.includes("localhost") ? "http://localhost:3000" : (appUrl || "http://localhost:3000")
+  }
 
   fetch(`${baseUrl}/API/agent-worker`, {
     method:  "POST",
