@@ -80,11 +80,11 @@ export async function POST(req) {
   }
 
   // 2. Cargar conversación
-  const convQuery = supabase
+  let convQuery = supabase
     .from("conversations")
     .select("id, mode, contact_id, wa_contact_id, pipeline_stage, organization_id")
     .eq("id", conversation_id)
-  if (organization_id) convQuery.eq("organization_id", organization_id)
+  if (organization_id) convQuery = convQuery.eq("organization_id", organization_id)
 
   const { data: conv } = await convQuery.single()
 
@@ -108,11 +108,11 @@ export async function POST(req) {
   // 4. Buscar agente asignado a la etapa
   let agent = null
   if (conv.pipeline_stage) {
-    const stageQuery = supabase
+    let stageQuery = supabase
       .from("pipeline_stages")
       .select("agent_id")
       .eq("name", conv.pipeline_stage)
-    if (orgId) stageQuery.eq("organization_id", orgId)
+    if (orgId) stageQuery = stageQuery.eq("organization_id", orgId)
 
     const { data: stageRow } = await stageQuery.maybeSingle()
     if (stageRow?.agent_id) {
@@ -128,13 +128,13 @@ export async function POST(req) {
 
   // Fallback: primer agente activo de la organización
   if (!agent) {
-    const fallbackQuery = supabase
+    let fallbackQuery = supabase
       .from("agents")
       .select("*")
       .eq("active", true)
       .order("created_at", { ascending: false })
       .limit(1)
-    if (orgId) fallbackQuery.eq("organization_id", orgId)
+    if (orgId) fallbackQuery = fallbackQuery.eq("organization_id", orgId)
 
     const { data: fallbackAgent } = await fallbackQuery.maybeSingle()
     agent = fallbackAgent ?? null

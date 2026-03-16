@@ -114,16 +114,16 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
   const supabase = getServiceClient()
   const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`
 
-  const contactQuery = supabase
+  let contactQuery = supabase
     .from("contacts")
     .select("id")
     .eq("phone", normalizedPhone)
-  if (orgId) contactQuery.eq("organization_id", orgId)
+  if (orgId) contactQuery = contactQuery.eq("organization_id", orgId)
 
   const { data: contact } = await contactQuery.maybeSingle()
   if (!contact) return
 
-  const convQuery = supabase
+  let convQuery = supabase
     .from("conversations")
     .select("id")
     .eq("contact_id", contact.id)
@@ -131,7 +131,7 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
-  if (orgId) convQuery.eq("organization_id", orgId)
+  if (orgId) convQuery = convQuery.eq("organization_id", orgId)
 
   const { data: conversation } = await convQuery.maybeSingle()
   if (!conversation) return
@@ -152,8 +152,9 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
     created_at:      now,
   })
 
+  // Resetear a modo bot para que pueda responder las replies a la plantilla
   await supabase
     .from("conversations")
-    .update({ last_message: `📋 Plantilla: ${templateName}`, last_activity: now })
+    .update({ last_message: `📋 Plantilla: ${templateName}`, last_activity: now, mode: "bot" })
     .eq("id", conversation.id)
 }
