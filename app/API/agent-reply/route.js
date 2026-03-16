@@ -86,9 +86,22 @@ export async function POST(req) {
     .eq("id", conversation_id)
   if (organization_id) convQuery = convQuery.eq("organization_id", organization_id)
 
-  const { data: conv } = await convQuery.single()
+  const { data: conv, error: convError } = await convQuery.single()
 
-  if (!conv || conv.mode !== "bot") {
+  if (convError) {
+    console.error(`[agent-reply] Error cargando conv=${conversation_id}:`, convError.message)
+    return Response.json({ action: "skip", reason: "conv_error", detail: convError.message })
+  }
+
+  if (!conv) {
+    console.warn(`[agent-reply] Conversación no encontrada conv=${conversation_id} org=${organization_id}`)
+    return Response.json({ action: "skip", reason: "conv_not_found" })
+  }
+
+  console.log(`[agent-reply] conv=${conversation_id} mode=${conv.mode} stage=${conv.pipeline_stage} org=${conv.organization_id}`)
+
+  if (conv.mode !== "bot") {
+    console.warn(`[agent-reply] Saltando — mode=${conv.mode} (no es bot)`)
     return Response.json({ action: "skip", reason: "not_bot_mode" })
   }
 
@@ -141,8 +154,11 @@ export async function POST(req) {
   }
 
   if (!agent) {
+    console.warn(`[agent-reply] No hay agente activo para conv=${conversation_id} org=${orgId} stage=${conv.pipeline_stage}`)
     return Response.json({ action: "skip", reason: "no_active_agent" })
   }
+
+  console.log(`[agent-reply] Usando agente="${agent.name}" provider=${agent.llm_provider} model=${agent.llm_model}`)
 
   // 5. Cargar historial (últimos 20 mensajes)
   const histQuery = supabase
