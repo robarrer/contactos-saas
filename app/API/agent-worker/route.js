@@ -128,17 +128,15 @@ export async function POST(req) {
 
 // ─── Invocar agente IA ────────────────────────────────────────────────────────
 
-async function invokeAgent(conversationId, messageText, waId, organizationId) {
-  let baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : null
+function getBaseUrl() {
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  if (process.env.VERCEL_URL)                   return `https://${process.env.VERCEL_URL}`
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
+  return appUrl && !appUrl.includes("localhost") ? appUrl : "http://localhost:3000"
+}
 
-  if (!baseUrl) {
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
-    baseUrl = appUrl.includes("localhost") ? "http://localhost:3000" : (appUrl || "http://localhost:3000")
-  }
+async function invokeAgent(conversationId, messageText, waId, organizationId) {
+  const baseUrl = getBaseUrl()
 
   console.log(`[worker] → agent-reply baseUrl=${baseUrl}`)
 

@@ -1,3 +1,4 @@
+import { after } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import crypto from "crypto"
 
@@ -249,33 +250,38 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
   }
 }
 
-// ─── Llamar al worker en fire-and-forget ─────────────────────────────────────
+// ─── Base URL para llamadas internas ─────────────────────────────────────────
+function getBaseUrl() {
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  if (process.env.VERCEL_URL)                   return `https://${process.env.VERCEL_URL}`
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
+  return appUrl && !appUrl.includes("localhost") ? appUrl : "http://localhost:3000"
+}
+
+// ─── Llamar al worker usando after() para garantizar ejecución post-respuesta ─
 function scheduleWorker(conversationId, content, waId, messageTimestamp, organizationId) {
-  // Prioridad: producción Vercel > deployment Vercel > APP_URL (si no es localhost) > localhost
-  let baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : null
+  const baseUrl = getBaseUrl()
+  console.log(`[webhook] Scheduling worker conv=${conversationId} org=${organizationId} url=${baseUrl}`)
 
-  if (!baseUrl) {
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
-    baseUrl = appUrl.includes("localhost") ? "http://localhost:3000" : (appUrl || "http://localhost:3000")
-  }
-
-  fetch(`${baseUrl}/API/agent-worker`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({
-      conversation_id:   conversationId,
-      content,
-      wa_id:             waId,
-      message_timestamp: messageTimestamp,
-      organization_id:   organizationId,
-    }),
-  }).catch((e) => console.error("[webhook] Error llamando worker:", e.message))
-
-  console.log(`[webhook] Worker llamado para conv=${conversationId} org=${organizationId}`)
+  after(
+    fetch(`${baseUrl}/API/agent-worker`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        conversation_id:   conversationId,
+        content,
+        wa_id:             waId,
+        message_timestamp: messageTimestamp,
+        organization_id:   organizationId,
+      }),
+    })
+    .then((res) => {
+      console.log(`[webhook] agent-worker respondió status=${res.status} conv=${conversationId}`)
+    })
+    .catch((e) => {
+      console.error(`[webhook] Error llamando worker: ${e.message}`)
+    })
+  )
 }
 
 // ─── Actualizar estado de mensaje saliente ────────────────────────────────────
