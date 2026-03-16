@@ -203,6 +203,13 @@ async function invokeAgent(conversationId, messageText, waId, organizationId) {
     const waData      = await waRes.json().catch(() => null)
     const waMessageId = waData?.messages?.[0]?.id ?? null
 
+    if (!waRes.ok) {
+      console.error(`[worker] ❌ WhatsApp API error ${waRes.status}:`, JSON.stringify(waData))
+      console.error(`[worker] waPhoneNumberId=${waPhoneNumberId} waToken_set=${!!waToken} to=${waId}`)
+    } else {
+      console.log(`[worker] ✅ WhatsApp enviado waMessageId=${waMessageId}`)
+    }
+
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       organization_id: organizationId ?? null,
