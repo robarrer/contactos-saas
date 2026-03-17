@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js"
 import { getEnabledFunctions } from "@/app/lib/integrations/catalog.js"
 import { execute as executeDentalink } from "@/app/lib/integrations/executors/dentalink.js"
+import { execute as executeAdmintour } from "@/app/lib/integrations/executors/admintour.js"
 
 function getServiceClient() {
   return createClient(
@@ -23,6 +24,7 @@ function detectEscalation(text) {
 
 const PLATFORM_EXECUTORS = {
   dentalink: executeDentalink,
+  admintour: executeAdmintour,
 }
 
 async function executeTool(fn, params) {

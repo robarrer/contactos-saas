@@ -106,7 +106,7 @@ function PlatformConfig({
       const res = await fetch("/API/integrations/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_token: config.api_token, api_url: config.api_url }),
+        body: JSON.stringify({ platform: platformId, ...config }),
       })
       const data = await res.json()
       setTestStatus({ ok: data.ok, message: data.message })
@@ -547,8 +547,9 @@ function AgentPanel({
               padding: "10px 16px", fontSize: 13,
               fontWeight: activeTab === tab ? 600 : 400,
               color: activeTab === tab ? "#2563eb" : "#6b7280",
+              borderTop: "none", borderLeft: "none", borderRight: "none",
               borderBottom: `2px solid ${activeTab === tab ? "#2563eb" : "transparent"}`,
-              background: "transparent", border: "none",
+              background: "transparent",
               cursor: "pointer", transition: "color 150ms",
             }}
           >

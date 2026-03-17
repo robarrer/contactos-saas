@@ -150,6 +150,108 @@ export const INTEGRATIONS_CATALOG = {
       },
     ],
   },
+
+  admintour: {
+    id: "admintour",
+    name: "Admintour",
+    description: "Sistema de gestión hotelera y cabañas. Consulta disponibilidad y crea reservas.",
+    icon: "\u26FA",
+    color: "#16a34a",
+    docsUrl: "https://www.postman.com/mission-administrator-95001897/api-admintour/",
+    configFields: [
+      {
+        key: "base_url",
+        label: "URL base de la API",
+        type: "url",
+        placeholder: "https://tudominio.admintour.com/api",
+        required: true,
+        hint: "URL base que te proporciona Admintour. Solicítala a soporte.",
+      },
+      {
+        key: "api_key",
+        label: "API Key (x-api-key)",
+        type: "password",
+        placeholder: "vYIuuPCp...",
+        required: true,
+        hint: "Clave de API que te proporciona Admintour. Solicítala a soporte.",
+      },
+      {
+        key: "hotcod",
+        label: "Código de hotel (hotcod)",
+        type: "text",
+        placeholder: "Ej: 12",
+        required: true,
+        hint: "Código numérico que identifica tu propiedad en Admintour.",
+      },
+      {
+        key: "servicio",
+        label: "Servicio",
+        type: "text",
+        placeholder: "MOTOREXTERNO",
+        required: false,
+        default: "MOTOREXTERNO",
+        hint: "Nombre del servicio configurado. Generalmente es MOTOREXTERNO.",
+      },
+    ],
+    functions: [
+      {
+        id: "consultar_disponibilidad",
+        name: "consultar_disponibilidad",
+        description:
+          "Consulta la disponibilidad de cabañas o habitaciones para un tipo específico en un rango de fechas. Úsala cuando el usuario pregunte por disponibilidad o quiera saber si hay lugar para ciertas fechas.",
+        category: "Disponibilidad",
+        http_method: "GET",
+        path: "/Externo_DisponibilidadHab",
+        parameters: [
+          {
+            name: "tipohab",
+            type: "string",
+            description: "Código del tipo de habitación o cabaña (ej: DOBMAT, MAT, MAT4). Consulta al usuario qué tipo prefiere o usa el que corresponda.",
+            required: true,
+            in: "query",
+          },
+          {
+            name: "desdefecha",
+            type: "string",
+            description: "Fecha de inicio en formato MM-DD-AAAA (ej: 03-08-2026 para 8 de marzo de 2026).",
+            required: true,
+            in: "query",
+          },
+          {
+            name: "hastafecha",
+            type: "string",
+            description: "Fecha de fin en formato MM-DD-AAAA (ej: 03-10-2026 para 10 de marzo de 2026).",
+            required: true,
+            in: "query",
+          },
+        ],
+      },
+      {
+        id: "crear_reserva",
+        name: "crear_reserva",
+        description:
+          "Crea una nueva reserva en Admintour con los datos del huésped y las fechas solicitadas. Úsala solo cuando el usuario haya confirmado todos los datos de la reserva.",
+        category: "Reservas",
+        http_method: "POST",
+        path: "/Externo_GraboReservaMotor",
+        parameters: [
+          { name: "nombre",         type: "string", description: "Nombre del titular de la reserva",                            required: true,  in: "body" },
+          { name: "apellido",       type: "string", description: "Apellido del titular de la reserva",                          required: true,  in: "body" },
+          { name: "fecha_desde",    type: "string", description: "Fecha de check-in en formato AAAA-MM-DD (ej: 2026-03-08)",    required: true,  in: "body" },
+          { name: "fecha_hasta",    type: "string", description: "Fecha de check-out en formato AAAA-MM-DD (ej: 2026-03-10)",   required: true,  in: "body" },
+          { name: "tipohab",        type: "string", description: "Código del tipo de habitación o cabaña (ej: DOBMAT)",          required: true,  in: "body" },
+          { name: "telefono",       type: "string", description: "Teléfono del huésped",                                        required: false, in: "body" },
+          { name: "correo",         type: "string", description: "Email del huésped",                                           required: false, in: "body" },
+          { name: "documento",      type: "string", description: "Número de documento/RUT del huésped",                         required: true,  in: "body" },
+          { name: "adultos",        type: "number", description: "Cantidad de adultos",                                         required: true,  in: "body" },
+          { name: "menores",        type: "number", description: "Cantidad de menores",                                         required: false, in: "body" },
+          { name: "observaciones",  type: "string", description: "Observaciones o notas especiales de la reserva",              required: false, in: "body" },
+          { name: "importe_total",  type: "number", description: "Importe total de la reserva en pesos",                        required: true,  in: "body" },
+          { name: "reservamotor",   type: "number", description: "Número de reserva externo (máximo 8 dígitos numéricos). Genera uno único si el usuario no lo provee.", required: true, in: "body" },
+        ],
+      },
+    ],
+  },
 }
 
 /**
