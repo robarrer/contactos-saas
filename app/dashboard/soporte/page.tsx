@@ -234,6 +234,7 @@ function ConversationList({
   contacts,
   activeId,
   onSelect,
+  onDelete,
   loadingMore,
   hasMore,
   onSearch,
@@ -243,6 +244,7 @@ function ConversationList({
   contacts: MockContact[]
   activeId: string | null
   onSelect: (id: string) => void
+  onDelete: (id: string) => void
   loadingMore: boolean
   hasMore: boolean
   onSearch: (q: string) => void
@@ -427,9 +429,8 @@ function ConversationList({
           const isActive = conv.id === activeId
 
           return (
-            <button
+            <div
               key={conv.id}
-              onClick={() => onSelect(conv.id)}
               style={{
                 display: "flex",
                 alignItems: "flex-start",
@@ -437,10 +438,20 @@ function ConversationList({
                 width: "100%",
                 padding: "10px 12px",
                 background: isActive ? "#eff6ff" : "transparent",
-                border: "none",
                 borderLeft: isActive ? "3px solid #2563eb" : "3px solid transparent",
                 cursor: "pointer",
                 textAlign: "left",
+                position: "relative",
+                boxSizing: "border-box",
+              }}
+              onClick={() => onSelect(conv.id)}
+              onMouseEnter={(e) => {
+                const btn = e.currentTarget.querySelector<HTMLButtonElement>("[data-delete]")
+                if (btn) btn.style.opacity = "1"
+              }}
+              onMouseLeave={(e) => {
+                const btn = e.currentTarget.querySelector<HTMLButtonElement>("[data-delete]")
+                if (btn) btn.style.opacity = "0"
               }}
             >
               <div style={{ position: "relative", flexShrink: 0 }}>
@@ -532,7 +543,48 @@ function ConversationList({
                   )}
                 </div>
               </div>
-            </button>
+
+              {/* Botón eliminar */}
+              <button
+                data-delete
+                onClick={(e) => { e.stopPropagation(); onDelete(conv.id) }}
+                title="Eliminar conversación"
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  width: 22,
+                  height: 22,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "transparent",
+                  border: "none",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  color: "#d1d5db",
+                  padding: 0,
+                  opacity: 0,
+                  transition: "opacity 150ms",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.opacity = "1"
+                  e.currentTarget.style.color = "#ef4444"
+                  e.currentTarget.style.background = "#fee2e2"
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.opacity = "0"
+                  e.currentTarget.style.color = "#d1d5db"
+                  e.currentTarget.style.background = "transparent"
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3 6H21" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  <path d="M8 6V4C8 3.45 8.45 3 9 3H15C15.55 3 16 3.45 16 4V6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                  <path d="M6 6L7 20H17L18 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            </div>
           )
         })}
 
@@ -1477,6 +1529,14 @@ export default function SoportePage() {
     return sendMessage(activeConvId, text, isInternal, "Agente")
   }
 
+  async function handleDeleteConversation(id: string) {
+    if (!confirm("¿Eliminar esta conversación y todos sus mensajes? Esta acción no se puede deshacer.")) return
+    await supabase.from("messages").delete().eq("conversation_id", id)
+    await supabase.from("conversations").delete().eq("id", id)
+    setConversations((prev) => prev.filter((c) => c.id !== id))
+    if (activeConvId === id) setActiveConvId(null)
+  }
+
   const activeConv    = conversations.find((c) => c.id === activeConvId)
   const activeContact = activeConv ? contacts.find((c) => c.id === activeConv.contactId) : null
   const activeMessages = messages.filter((m) => m.conversationId === activeConvId)
@@ -1517,6 +1577,7 @@ export default function SoportePage() {
             contacts={contacts}
             activeId={activeConvId}
             onSelect={handleSelectConversation}
+            onDelete={handleDeleteConversation}
             loadingMore={loadingMore}
             hasMore={hasMore}
             onSearch={searchConversations}

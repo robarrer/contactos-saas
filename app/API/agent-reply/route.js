@@ -1,4 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
+import { getEnabledFunctions } from "@/app/lib/integrations/catalog.js"
+import { execute as executeDentalink } from "@/app/lib/integrations/executors/dentalink.js"
 
 function getServiceClient() {
   return createClient(
@@ -17,97 +19,66 @@ function detectEscalation(text) {
   return ESCALATION_KEYWORDS.some((kw) => lower.includes(kw))
 }
 
-// ─── Ejecutar una tool (llamada HTTP a API externa) ───────────────────────────
+// ─── Executores por plataforma ────────────────────────────────────────────────
 
-async function executeTool(tool, params) {
+const PLATFORM_EXECUTORS = {
+  dentalink: executeDentalink,
+}
+
+async function executeTool(fn, params) {
+  const platform = fn._platform
+  const config   = fn._config ?? {}
+  const executor = PLATFORM_EXECUTORS[platform]
+
+  if (!executor) {
+    console.error(`[agent-reply] No hay executor para plataforma "${platform}"`)
+    return { error: `Plataforma no soportada: ${platform}` }
+  }
+
   try {
-    // Reemplazar {{variable}} en la URL con valores de params
-    let url = tool.url.replace(/\{\{(\w+)\}\}/g, (_, key) =>
-      encodeURIComponent(params[key] ?? "")
-    )
-
-    // Agregar query params
-    const queryParams = (tool.parameters || []).filter((p) => p.in === "query")
-    if (queryParams.length) {
-      const qs = new URLSearchParams()
-      queryParams.forEach((p) => {
-        if (params[p.name] !== undefined && params[p.name] !== null)
-          qs.set(p.name, String(params[p.name]))
-      })
-      const qsStr = qs.toString()
-      if (qsStr) url += (url.includes("?") ? "&" : "?") + qsStr
-    }
-
-    const headers = { ...(tool.headers || {}) }
-    let body
-
-    if (["POST", "PUT", "PATCH"].includes(tool.http_method)) {
-      const bodyObj = {}
-      ;(tool.parameters || [])
-        .filter((p) => p.in === "body")
-        .forEach((p) => {
-          if (params[p.name] !== undefined) bodyObj[p.name] = params[p.name]
-        })
-      body = JSON.stringify(bodyObj)
-      if (!headers["Content-Type"]) headers["Content-Type"] = "application/json"
-    }
-
-    console.log(`[agent-reply] executeTool ${tool.http_method} ${url}`)
-    const res = await fetch(url, { method: tool.http_method, headers, body })
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => "")
-      console.error(`[agent-reply] Tool "${tool.name}" HTTP ${res.status}:`, errText.slice(0, 200))
-      return { error: `HTTP ${res.status}`, message: errText.slice(0, 500) }
-    }
-
-    const ct = res.headers.get("content-type") || ""
-    const result = ct.includes("application/json") ? await res.json() : { text: await res.text() }
-    console.log(`[agent-reply] Tool "${tool.name}" result:`, JSON.stringify(result).slice(0, 300))
-    return result
+    console.log(`[agent-reply] executeTool platform=${platform} fn=${fn.id}`, JSON.stringify(params))
+    return await executor(fn.id, params, config)
   } catch (err) {
-    console.error(`[agent-reply] Error ejecutando tool "${tool.name}":`, err.message)
+    console.error(`[agent-reply] Error ejecutando ${platform}.${fn.id}:`, err.message)
     return { error: err.message }
   }
 }
 
 // ─── Construir schema de tools para el LLM ───────────────────────────────────
 
+function buildLLMParams(parameters) {
+  const props = {}
+  const required = []
+  for (const p of parameters ?? []) {
+    props[p.name] = { type: p.type || "string", description: p.description }
+    if (p.required) required.push(p.name)
+  }
+  return { properties: props, required }
+}
+
 function buildOpenAITools(tools) {
-  return tools.map((t) => ({
-    type: "function",
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: {
-        type: "object",
-        properties: Object.fromEntries(
-          (t.parameters || []).map((p) => [
-            p.name,
-            { type: p.type || "string", description: p.description },
-          ])
-        ),
-        required: (t.parameters || []).filter((p) => p.required).map((p) => p.name),
+  return tools.map((t) => {
+    const { properties, required } = buildLLMParams(t.parameters)
+    return {
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: { type: "object", properties, required },
       },
-    },
-  }))
+    }
+  })
 }
 
 function buildAnthropicTools(tools) {
-  return tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: {
-      type: "object",
-      properties: Object.fromEntries(
-        (t.parameters || []).map((p) => [
-          p.name,
-          { type: p.type || "string", description: p.description },
-        ])
-      ),
-      required: (t.parameters || []).filter((p) => p.required).map((p) => p.name),
-    },
-  }))
+  return tools.map((t) => {
+    const { properties, required } = buildLLMParams(t.parameters)
+    return {
+      name: t.name,
+      description: t.description,
+      input_schema: { type: "object", properties, required },
+    }
+  })
 }
 
 // ─── Llamada a OpenAI (con soporte de function calling) ──────────────────────
@@ -349,16 +320,27 @@ export async function POST(req) {
 
   console.log(`[agent-reply] Usando agente="${agent.name}" provider=${agent.llm_provider} model=${agent.llm_model}`)
 
-  // 5. Cargar herramientas del agente (integraciones API)
-  const { data: agentTools } = await supabase
-    .from("agent_tools")
-    .select("*")
+  // 5. Cargar integraciones activas y sus funciones habilitadas (desde catálogo)
+  const { data: integrations } = await supabase
+    .from("agent_integrations")
+    .select("id, platform, config, enabled_functions")
     .eq("agent_id", agent.id)
     .eq("enabled", true)
 
-  const tools = agentTools ?? []
+  let tools = []
+  for (const integration of integrations ?? []) {
+    const fns = getEnabledFunctions(integration.platform, integration.enabled_functions ?? [])
+    for (const fn of fns) {
+      tools.push({
+        ...fn,
+        _platform: integration.platform,
+        _config:   integration.config ?? {},
+      })
+    }
+  }
+
   if (tools.length) {
-    console.log(`[agent-reply] ${tools.length} herramienta(s): ${tools.map((t) => t.name).join(", ")}`)
+    console.log(`[agent-reply] ${tools.length} función(es): ${tools.map((t) => t.name).join(", ")}`)
   }
 
   // 6. Cargar historial (últimos 20 mensajes)
