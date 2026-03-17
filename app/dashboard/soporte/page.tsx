@@ -301,8 +301,6 @@ function ConversationList({
     { id: "all", label: "Todos" },
     { id: "bot", label: "Bot" },
     { id: "human", label: "Humano" },
-    { id: "unassigned", label: "Sin asignar" },
-    { id: "mine", label: "Míos" },
   ]
 
   return (
@@ -341,81 +339,75 @@ function ConversationList({
         </div>
       </div>
 
-      {/* Tabs */}
-      <div
-        style={{
-          display: "flex",
-          overflowX: "auto",
-          gap: 4,
-          padding: "0 12px 8px",
-          scrollbarWidth: "none",
-        }}
-      >
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "5px 10px",
-              borderRadius: 20,
-              border: "none",
-              background: tab === t.id ? "#111827" : "#f3f4f6",
-              color: tab === t.id ? "white" : "#4b5563",
-              fontSize: 12,
-              fontWeight: tab === t.id ? 600 : 400,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            {t.label}
-            {t.id === "all" && totalUnread > 0 && (
-              <span
-                style={{
-                  background: "#ef4444",
-                  color: "white",
-                  borderRadius: 20,
-                  padding: "0 5px",
-                  fontSize: 10,
-                  fontWeight: 700,
-                  lineHeight: "16px",
-                }}
-              >
-                {totalUnread}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* Filtros unificados */}
+      <div style={{ padding: "0 12px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
 
-      {/* Secondary filters */}
-      <div style={{ display: "flex", gap: 6, padding: "0 12px 10px" }}>
-        <select
-          value={channelFilter}
-          onChange={(e) => setChannelFilter(e.target.value as Channel | "all")}
-          style={selectMiniStyle}
-        >
-          <option value="all">Canal</option>
-          <option value="whatsapp">WhatsApp</option>
-          <option value="instagram">Instagram</option>
-          <option value="facebook">Facebook</option>
-          <option value="webchat">Webchat</option>
-        </select>
-        <select
-          value={stageFilter}
-          onChange={(e) => setStageFilter(e.target.value as PipelineStage | "all")}
-          style={selectMiniStyle}
-        >
-          <option value="all">Etapa</option>
-          {stages.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
+        {/* Tabs */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "5px 10px",
+                borderRadius: 20,
+                border: "none",
+                background: tab === t.id ? "#111827" : "#f3f4f6",
+                color: tab === t.id ? "white" : "#4b5563",
+                fontSize: 12,
+                fontWeight: tab === t.id ? 600 : 400,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {t.label}
+              {t.id === "all" && totalUnread > 0 && (
+                <span
+                  style={{
+                    background: "#ef4444",
+                    color: "white",
+                    borderRadius: 20,
+                    padding: "0 5px",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    lineHeight: "16px",
+                  }}
+                >
+                  {totalUnread}
+                </span>
+              )}
+            </button>
           ))}
-        </select>
+        </div>
+
+        {/* Selectores Canal + Etapa */}
+        <div style={{ display: "flex", gap: 6 }}>
+          <select
+            value={channelFilter}
+            onChange={(e) => setChannelFilter(e.target.value as Channel | "all")}
+            style={{ ...selectMiniStyle, flex: 1 }}
+          >
+            <option value="all">Todos los canales</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+            <option value="facebook">Facebook</option>
+            <option value="webchat">Webchat</option>
+          </select>
+          <select
+            value={stageFilter}
+            onChange={(e) => setStageFilter(e.target.value as PipelineStage | "all")}
+            style={{ ...selectMiniStyle, flex: 1 }}
+          >
+            <option value="all">Todas las etapas</option>
+            {stages.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+
       </div>
 
       {/* List */}
@@ -1003,96 +995,132 @@ function ChatPanel({
       )}
 
       {/* Input */}
-      <div
-        style={{
-          borderTop: `3px solid ${isInternal ? "#f59e0b" : "#e5e7eb"}`,
+      <div style={{ padding: "10px 12px 12px", flexShrink: 0, background: "white", borderTop: "1px solid #e5e7eb" }}>
+        <div style={{
+          border: `1.5px solid ${isInternal ? "#f59e0b" : "#e5e7eb"}`,
+          borderRadius: 12,
           background: isInternal ? "#fffbeb" : "white",
-          padding: "10px 12px",
-          flexShrink: 0,
-        }}
-      >
-        {/* Mode toggle */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
-          <button
-            onClick={() => setIsInternal(false)}
-            style={{
-              padding: "4px 10px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              background: !isInternal ? "#111827" : "white",
-              color: !isInternal ? "white" : "#6b7280",
-              fontSize: 12,
-              cursor: "pointer",
-            }}
-          >
-            Mensaje
-          </button>
-          <button
-            onClick={() => setIsInternal(true)}
-            style={{
-              padding: "4px 10px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-              background: isInternal ? "#f59e0b" : "white",
-              color: isInternal ? "white" : "#6b7280",
-              fontSize: 12,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            🔒 Nota interna
-          </button>
-        </div>
+          overflow: "hidden",
+          transition: "border-color 150ms, background 150ms",
+        }}>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          {/* Tabs toggle */}
+          <div style={{ display: "flex", borderBottom: `1px solid ${isInternal ? "#fde68a" : "#f3f4f6"}` }}>
+            <button
+              onClick={() => setIsInternal(false)}
+              style={{
+                padding: "7px 14px",
+                fontSize: 12,
+                fontWeight: !isInternal ? 600 : 400,
+                color: !isInternal ? "#111827" : "#9ca3af",
+                background: "transparent",
+                border: "none",
+                borderBottom: `2px solid ${!isInternal ? "#111827" : "transparent"}`,
+                cursor: "pointer",
+                transition: "color 150ms",
+              }}
+            >
+              Mensaje
+            </button>
+            <button
+              onClick={() => setIsInternal(true)}
+              style={{
+                padding: "7px 14px",
+                fontSize: 12,
+                fontWeight: isInternal ? 600 : 400,
+                color: isInternal ? "#d97706" : "#9ca3af",
+                background: "transparent",
+                border: "none",
+                borderBottom: `2px solid ${isInternal ? "#f59e0b" : "transparent"}`,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                transition: "color 150ms",
+              }}
+            >
+              🔒 Nota interna
+            </button>
+          </div>
+
+          {/* Textarea */}
           <textarea
             ref={inputRef}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={
-              isInternal ? "Escribe una nota interna (no visible para el contacto)…" : "Escribe un mensaje… (Enter para enviar)"
-            }
-            rows={2}
+            placeholder={isInternal ? "Escribe una nota interna (no visible para el contacto)…" : "Escribe un mensaje…"}
+            rows={3}
             style={{
-              flex: 1,
+              width: "100%",
               resize: "none",
-              padding: "9px 12px",
-              border: "1px solid #e5e7eb",
-              borderRadius: 10,
-              fontSize: 13,
+              padding: "10px 12px",
+              border: "none",
               outline: "none",
+              fontSize: 13,
               background: "transparent",
               fontFamily: "inherit",
+              lineHeight: 1.5,
+              boxSizing: "border-box",
+              color: "#111827",
             }}
           />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+
+          {/* Actions bar */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "6px 10px 8px",
+            borderTop: `1px solid ${isInternal ? "#fde68a" : "#f3f4f6"}`,
+          }}>
             <button
               onClick={() => { setShowCanned((v) => !v); setCannedSearch("") }}
               title="Respuestas predefinidas"
-              style={iconButtonStyle}
+              style={{
+                background: showCanned ? "#f3f4f6" : "transparent",
+                border: "1px solid #e5e7eb",
+                borderRadius: 7,
+                padding: "5px 10px",
+                cursor: "pointer",
+                fontSize: 13,
+                color: "#6b7280",
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+              }}
             >
-              ⚡
+              <span>⚡</span>
+              <span style={{ fontSize: 12 }}>Respuestas rápidas</span>
             </button>
+
             <button
               onClick={sendMessage}
               disabled={inputText.trim() === ""}
               title="Enviar (Enter)"
               style={{
-                ...iconButtonStyle,
-                background: inputText.trim() ? "#2563eb" : "#e5e7eb",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 14px",
+                borderRadius: 8,
+                border: "none",
+                background: inputText.trim() ? (isInternal ? "#f59e0b" : "#2563eb") : "#e5e7eb",
                 color: inputText.trim() ? "white" : "#9ca3af",
+                fontSize: 12,
+                fontWeight: 600,
                 cursor: inputText.trim() ? "pointer" : "default",
+                transition: "background 150ms",
               }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              {isInternal ? "Guardar nota" : "Enviar"}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
           </div>
+
         </div>
       </div>
     </div>
