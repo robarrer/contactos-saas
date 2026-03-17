@@ -238,8 +238,9 @@ function PlatformConfig({
         ))}
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 4 }}>
-          <button type="button" onClick={handleTest} disabled={testing || !config.api_token?.trim()}
-            style={{ ...secondaryBtn, fontSize: 12, opacity: testing ? 0.7 : 1 }}>
+          <button type="button" onClick={handleTest}
+            disabled={testing || platform.configFields.filter((f: any) => f.required).some((f: any) => !config[f.key]?.trim())}
+            style={{ ...secondaryBtn, fontSize: 12, opacity: (testing || platform.configFields.filter((f: any) => f.required).some((f: any) => !config[f.key]?.trim())) ? 0.7 : 1 }}>
             {testing ? "Probando…" : "Probar conexión"}
           </button>
           {testStatus && (
@@ -502,7 +503,7 @@ function AgentPanel({
   saving: boolean
 }) {
   const [form, setForm]           = useState<Agent>(agent)
-  const [activeTab, setActiveTab] = useState<"entrenamiento" | "integraciones">("entrenamiento")
+  const [activeTab, setActiveTab] = useState<"entrenamiento" | "integraciones" | "conocimiento">("entrenamiento")
   const textareaRef               = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { setForm(agent); setActiveTab("entrenamiento") }, [agent])
@@ -541,7 +542,7 @@ function AgentPanel({
 
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", paddingLeft: 20, flexShrink: 0 }}>
-        {(["entrenamiento", "integraciones"] as const).map((tab) => (
+        {(["entrenamiento", "integraciones", "conocimiento"] as const).map((tab) => (
           <button key={tab} type="button" onClick={() => setActiveTab(tab)}
             style={{
               padding: "10px 16px", fontSize: 13,
@@ -553,13 +554,23 @@ function AgentPanel({
               cursor: "pointer", transition: "color 150ms",
             }}
           >
-            {tab === "entrenamiento" ? "Entrenamiento" : "Integraciones"}
+            {tab === "entrenamiento" ? "Entrenamiento" : tab === "integraciones" ? "Integraciones" : "Conocimiento"}
           </button>
         ))}
       </div>
 
       {/* Content */}
-      {activeTab === "entrenamiento" ? (
+      {activeTab === "conocimiento" ? (
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {!agent.id ? (
+            <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af" }}>
+              <p style={{ fontSize: 13 }}>Guarda el agente primero para configurar la base de conocimiento.</p>
+            </div>
+          ) : (
+            <KnowledgeBaseTab agentId={agent.id} />
+          )}
+        </div>
+      ) : activeTab === "entrenamiento" ? (
         <form onSubmit={handleSubmit} style={{ flex: 1, overflow: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: 16 }}>
 
           <div>
@@ -646,6 +657,331 @@ function AgentPanel({
           ) : (
             <IntegrationsTab agentId={agent.id} />
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── KnowledgeBaseTab ─────────────────────────────────────────────────────────
+
+type CsvKb = {
+  id: string
+  name: string
+  search_column: string
+  headers: string[]
+  row_count: number
+  created_at: string
+}
+
+function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[]; separator: string } {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0)
+  if (lines.length < 2) return { headers: [], rows: [], separator: "," }
+
+  // Auto-detectar separador: punto y coma tiene prioridad si aparece más que la coma
+  const firstLine = lines[0]
+  const semicolons = (firstLine.match(/;/g) ?? []).length
+  const commas     = (firstLine.match(/,/g) ?? []).length
+  const sep = semicolons >= commas ? ";" : ","
+
+  function splitLine(line: string): string[] {
+    const result: string[] = []
+    let current = ""
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') {
+        inQuotes = !inQuotes
+      } else if (ch === sep && !inQuotes) {
+        result.push(current.trim())
+        current = ""
+      } else {
+        current += ch
+      }
+    }
+    result.push(current.trim())
+    return result
+  }
+
+  const headers = splitLine(lines[0])
+  const rows = lines.slice(1).map((line) => {
+    const values = splitLine(line)
+    const row: Record<string, string> = {}
+    headers.forEach((h, i) => { row[h] = values[i] ?? "" })
+    return row
+  })
+  return { headers, rows, separator: sep }
+}
+
+function KnowledgeBaseTab({ agentId }: { agentId: string }) {
+  const [kbs, setKbs]               = useState<CsvKb[]>([])
+  const [loadingKbs, setLoadingKbs] = useState(true)
+  const [showUpload, setShowUpload] = useState(false)
+  const [csvHeaders, setCsvHeaders]   = useState<string[]>([])
+  const [csvRows, setCsvRows]         = useState<Record<string, string>[]>([])
+  const [csvName, setCsvName]         = useState("")
+  const [csvSeparator, setCsvSeparator]   = useState("")
+  const [csvFileName, setCsvFileName]     = useState("")
+  const [searchColumn, setSearchColumn] = useState("")
+  const [savingKb, setSavingKb]       = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function loadKbs() {
+    setLoadingKbs(true)
+    const { data } = await supabase
+      .from("agent_csv_knowledge")
+      .select("id, name, search_column, headers, row_count, created_at")
+      .eq("agent_id", agentId)
+      .order("created_at", { ascending: false })
+    setKbs(data ?? [])
+    setLoadingKbs(false)
+  }
+
+  useEffect(() => { loadKbs() }, [agentId])
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvFileName(file.name)
+    setCsvName(file.name.replace(/\.csv$/i, ""))
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string
+      const { headers, rows, separator } = parseCSV(text)
+      setCsvHeaders(headers)
+      setCsvRows(rows)
+      setCsvSeparator(separator)
+      setSearchColumn(headers[0] ?? "")
+    }
+    reader.readAsText(file)
+  }
+
+  function resetUpload() {
+    setCsvHeaders([])
+    setCsvRows([])
+    setCsvName("")
+    setCsvSeparator("")
+    setCsvFileName("")
+    setSearchColumn("")
+    setShowUpload(false)
+    if (fileRef.current) fileRef.current.value = ""
+  }
+
+  async function handleSaveKb() {
+    if (!searchColumn || !csvRows.length || !csvName.trim()) return
+    setSavingKb(true)
+    const { error } = await supabase.from("agent_csv_knowledge").insert({
+      agent_id:      agentId,
+      name:          csvName.trim(),
+      search_column: searchColumn,
+      headers:       csvHeaders,
+      rows:          csvRows,
+      row_count:     csvRows.length,
+    })
+    if (error) {
+      alert("Error guardando base de conocimiento: " + error.message)
+      setSavingKb(false)
+      return
+    }
+    await loadKbs()
+    resetUpload()
+    setSavingKb(false)
+  }
+
+  async function handleDeleteKb(id: string) {
+    if (!confirm("¿Eliminar esta base de conocimiento? El agente dejará de tener acceso a sus datos.")) return
+    await supabase.from("agent_csv_knowledge").delete().eq("id", id)
+    setKbs((prev) => prev.filter((k) => k.id !== id))
+  }
+
+  return (
+    <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>Base de conocimiento CSV</div>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 3, lineHeight: 1.5 }}>
+            Sube archivos CSV estructurados. El agente buscará registros usando coincidencia exacta en la columna seleccionada.
+          </div>
+        </div>
+        {!showUpload && (
+          <button type="button" onClick={() => setShowUpload(true)} style={{ ...primaryBtn, flexShrink: 0 }}>
+            + Cargar CSV
+          </button>
+        )}
+      </div>
+
+      {/* Formulario de carga */}
+      {showUpload && (
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 16, background: "#f9fafb", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>Nuevo archivo CSV</div>
+
+          {/* File input */}
+          <div>
+            <label style={labelStyle}>Archivo <span style={{ color: "#ef4444" }}>*</span></label>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleFileChange}
+              style={{ display: "none" }}
+            />
+            <div
+              onClick={() => fileRef.current?.click()}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                border: "1px dashed #d1d5db", borderRadius: 8,
+                padding: "12px 14px", cursor: "pointer", background: "white",
+                transition: "border-color 150ms, background 150ms",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "#2563eb"
+                e.currentTarget.style.background = "#eff6ff"
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "#d1d5db"
+                e.currentTarget.style.background = "white"
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ color: "#6b7280", flexShrink: 0 }}>
+                <path d="M21 15V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <polyline points="17 8 12 3 7 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <line x1="12" y1="3" x2="12" y2="15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: csvFileName ? "#111827" : "#374151" }}>
+                  {csvFileName || "Seleccionar archivo CSV"}
+                </div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>
+                  Coma (,) o punto y coma (;) — primera fila con encabezados
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Columnas detectadas + configuración */}
+          {csvHeaders.length > 0 && (
+            <>
+              <div>
+                <label style={labelStyle}>Nombre de esta base de conocimiento <span style={{ color: "#ef4444" }}>*</span></label>
+                <input
+                  type="text"
+                  value={csvName}
+                  onChange={(e) => setCsvName(e.target.value)}
+                  style={inputStyle}
+                  placeholder="Ej: Catálogo de habitaciones"
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Columnas detectadas ({csvHeaders.length})</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                  {csvHeaders.map((h) => (
+                    <span key={h} style={{
+                      padding: "3px 10px", borderRadius: 6,
+                      background: h === searchColumn ? "#dbeafe" : "#f3f4f6",
+                      color: h === searchColumn ? "#1d4ed8" : "#374151",
+                      fontSize: 12, fontWeight: h === searchColumn ? 600 : 400,
+                      border: `1px solid ${h === searchColumn ? "#bfdbfe" : "#e5e7eb"}`,
+                    }}>
+                      {h}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Columna de búsqueda <span style={{ color: "#ef4444" }}>*</span></label>
+                <select
+                  value={searchColumn}
+                  onChange={(e) => setSearchColumn(e.target.value)}
+                  style={inputStyle}
+                >
+                  {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                </select>
+                <p style={hintStyle}>El agente buscará registros usando esta columna como clave exacta (sin distinguir mayúsculas).</p>
+              </div>
+
+              <div style={{ padding: "10px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 12, color: "#166534" }}>
+                ✓ {csvRows.length} registros listos para cargar · separador detectado: <strong>{csvSeparator === ";" ? "punto y coma (;)" : "coma (,)"}</strong>
+              </div>
+            </>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={resetUpload} style={secondaryBtn}>
+              Cancelar
+            </button>
+            {csvHeaders.length > 0 && (
+              <button
+                type="button"
+                onClick={handleSaveKb}
+                disabled={savingKb || !searchColumn || !csvName.trim()}
+                style={{ ...primaryBtn, opacity: savingKb ? 0.7 : 1 }}
+              >
+                {savingKb ? "Guardando…" : "Guardar base de conocimiento"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Lista de CSVs existentes */}
+      {loadingKbs ? (
+        <p style={{ fontSize: 13, color: "#9ca3af" }}>Cargando…</p>
+      ) : kbs.length === 0 && !showUpload ? (
+        <div style={{ textAlign: "center", padding: "40px 16px", color: "#9ca3af", border: "2px dashed #e5e7eb", borderRadius: 10 }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>Sin bases de conocimiento</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Usa "+ Cargar CSV" para agregar la primera.</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {kbs.map((kb) => (
+            <div key={kb.id} style={{
+              border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 14px",
+              background: "white", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "#111827", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>📄</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kb.name}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 3 }}>
+                  Búsqueda por: <strong style={{ color: "#374151" }}>{kb.search_column}</strong>
+                  {" · "}
+                  {kb.row_count} registro{kb.row_count !== 1 ? "s" : ""}
+                  {" · "}
+                  {kb.headers.length} columna{kb.headers.length !== 1 ? "s" : ""}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                  {kb.headers.map((h) => (
+                    <span key={h} style={{
+                      padding: "2px 7px", borderRadius: 5, fontSize: 11,
+                      background: h === kb.search_column ? "#dbeafe" : "#f3f4f6",
+                      color: h === kb.search_column ? "#1d4ed8" : "#6b7280",
+                      fontWeight: h === kb.search_column ? 600 : 400,
+                    }}>
+                      {h}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleDeleteKb(kb.id)}
+                title="Eliminar"
+                style={{ ...iconBtn, color: "#ef4444", flexShrink: 0 }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3 6H21" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M8 6V4C8 3.44772 8.44772 3 9 3H15C15.5523 3 16 3.44772 16 4V6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M6 6L7 21H17L18 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>

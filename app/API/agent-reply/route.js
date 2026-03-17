@@ -30,6 +30,20 @@ const PLATFORM_EXECUTORS = {
 async function executeTool(fn, params) {
   const platform = fn._platform
   const config   = fn._config ?? {}
+
+  // Búsqueda exacta en base de conocimiento CSV
+  if (platform === "csv_kb") {
+    const searchVal = String(params.valor ?? "").trim().toLowerCase()
+    const rows      = fn._kb_rows ?? []
+    const col       = fn._search_column
+    const matches   = rows.filter((r) => String(r[col] ?? "").trim().toLowerCase() === searchVal)
+    if (!matches.length) {
+      return { resultado: `No se encontraron registros con el valor "${params.valor}" en la columna "${col}".` }
+    }
+    console.log(`[agent-reply] csv_kb "${fn._kb_name}" col="${col}" val="${searchVal}" → ${matches.length} resultado(s)`)
+    return { resultado: matches, total: matches.length }
+  }
+
   const executor = PLATFORM_EXECUTORS[platform]
 
   if (!executor) {
@@ -281,15 +295,19 @@ export async function POST(req) {
   }
 
   // 4. Buscar agente asignado a la etapa
+  // Nota: pipeline_stages no almacena organization_id, se busca solo por nombre.
   let agent = null
   if (conv.pipeline_stage) {
-    let stageQuery = supabase
+    const { data: stageRow } = await supabase
       .from("pipeline_stages")
       .select("agent_id")
       .eq("name", conv.pipeline_stage)
-    if (orgId) stageQuery = stageQuery.eq("organization_id", orgId)
+      .order("position", { ascending: true })
+      .limit(1)
+      .maybeSingle()
 
-    const { data: stageRow } = await stageQuery.maybeSingle()
+    console.log(`[agent-reply] stage="${conv.pipeline_stage}" → agent_id=${stageRow?.agent_id ?? "ninguno"}`)
+
     if (stageRow?.agent_id) {
       const { data: stageAgent } = await supabase
         .from("agents")
@@ -297,17 +315,24 @@ export async function POST(req) {
         .eq("id", stageRow.agent_id)
         .eq("active", true)
         .maybeSingle()
+
       agent = stageAgent ?? null
+      if (!agent) {
+        console.warn(`[agent-reply] Agente ${stageRow.agent_id} asignado a la etapa no existe o está inactivo.`)
+      }
+    } else {
+      console.warn(`[agent-reply] La etapa "${conv.pipeline_stage}" no tiene agente asignado.`)
     }
   }
 
-  // Fallback: primer agente activo de la organización
+  // Fallback: solo si la etapa no tiene agente asignado o el agente está inactivo
   if (!agent) {
+    console.warn(`[agent-reply] Usando fallback — no hay agente para la etapa "${conv.pipeline_stage}".`)
     let fallbackQuery = supabase
       .from("agents")
       .select("*")
       .eq("active", true)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: true })
       .limit(1)
     if (orgId) fallbackQuery = fallbackQuery.eq("organization_id", orgId)
 
@@ -341,34 +366,105 @@ export async function POST(req) {
     }
   }
 
+  // 5b. Cargar bases de conocimiento CSV del agente
+  const { data: csvKbs, error: csvError } = await supabase
+    .from("agent_csv_knowledge")
+    .select("id, name, search_column, rows")
+    .eq("agent_id", agent.id)
+
+  if (csvError) {
+    console.error(`[agent-reply] Error cargando CSV KBs:`, csvError.message)
+  }
+
+  const csvKbTools = []
+  for (const kb of csvKbs ?? []) {
+    const safeName = kb.name
+      .toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "")
+      .slice(0, 30) || `kb_${kb.id.slice(0, 8)}`
+
+    const toolDef = {
+      id:          `csv_${safeName}`,
+      name:        `buscar_${safeName}`,
+      description: `OBLIGATORIO: Usa esta función para buscar en la base de datos "${kb.name}" cuando el usuario mencione cualquier código, número, referencia o identificador. Búsqueda exacta por la columna "${kb.search_column}". SIEMPRE llama a esta función antes de responder sobre un código o registro específico.`,
+      parameters:  [
+        {
+          name:        "valor",
+          type:        "string",
+          description: `Valor exacto a buscar en la columna "${kb.search_column}" (por ejemplo: un código numérico, un ID o una referencia)`,
+          required:    true,
+        },
+      ],
+      _platform:      "csv_kb",
+      _config:        {},
+      _kb_rows:       kb.rows ?? [],
+      _search_column: kb.search_column,
+      _kb_name:       kb.name,
+    }
+    tools.push(toolDef)
+    csvKbTools.push(toolDef)
+    console.log(`[agent-reply] CSV KB cargado: "${kb.name}" columna="${kb.search_column}" filas=${Array.isArray(kb.rows) ? kb.rows.length : "?"}`)
+  }
+
+  if (!csvKbs || csvKbs.length === 0) {
+    console.warn(`[agent-reply] No se encontraron CSV KBs para agent_id=${agent.id}`)
+  }
+
   if (tools.length) {
     console.log(`[agent-reply] ${tools.length} función(es): ${tools.map((t) => t.name).join(", ")}`)
   }
 
-  // 6. Cargar historial (últimos 20 mensajes)
+  // 6. Cargar historial (últimos 20 mensajes, solo del contacto para evitar
+  //    que respuestas de otros agentes contaminen el contexto)
   const { data: history } = await supabase
     .from("messages")
-    .select("direction, sender_type, content")
+    .select("direction, sender_type, sender_name, content")
     .eq("conversation_id", conversation_id)
     .eq("is_internal", false)
     .order("created_at", { ascending: false })
     .limit(20)
 
-  const messages = (history ?? []).reverse().map((m) => ({
-    role: m.sender_type === "contact" ? "user" : "assistant",
-    content: m.content ?? "",
-  }))
+  const messages = (history ?? []).reverse().map((m) => {
+    if (m.sender_type === "contact") {
+      return { role: "user", content: m.content ?? "" }
+    }
+    // Si el sender_name coincide con el agente actual, es un mensaje propio
+    const isCurrentAgent = m.sender_name === agent.name
+    if (isCurrentAgent) {
+      return { role: "assistant", content: m.content ?? "" }
+    }
+    // Mensaje de otro agente o bot anterior: marcarlo para que no contamine
+    return {
+      role: "assistant",
+      content: `[Mensaje de otro asistente — ignora su contexto temático]: ${m.content ?? ""}`,
+    }
+  })
 
   if (!messages.length || messages[messages.length - 1].content !== message_text) {
     messages.push({ role: "user", content: message_text })
   }
 
   // 7. System prompt
+  const kbSection = csvKbTools.length > 0
+    ? [
+        "",
+        "BASES DE CONOCIMIENTO DISPONIBLES:",
+        ...csvKbTools.map((kb) => `- "${kb._kb_name}": búsqueda exacta por columna "${kb._search_column}". Usa la función ${kb.name}() SIEMPRE que el usuario mencione un código, número o referencia que pueda estar en esta base de datos.`),
+        "REGLA CRÍTICA: Antes de responder que no tienes información sobre un código o registro, DEBES llamar a la función de búsqueda correspondiente. Nunca digas 'no tengo información' sin haber buscado primero.",
+      ].join("\n")
+    : ""
+
   const systemPrompt = [
-    agent.instructions?.trim() || "Eres un asistente de atención al cliente. Responde de forma amable y concisa en español.",
+    `Eres "${agent.name}". ${agent.instructions?.trim() || "Eres un asistente de atención al cliente. Responde de forma amable y concisa en español."}`,
+    kbSection,
     "",
     "REGLAS IMPORTANTES:",
     "- Responde SIEMPRE en español.",
+    `- Tu identidad es ÚNICAMENTE "${agent.name}". No asumas ni uses conocimiento, contexto ni tono de ningún otro agente que aparezca en el historial.`,
+    "- Si en el historial hay mensajes marcados como '[Respuesta anterior de otro asistente]', ignora su contenido temático y responde solo según TUS instrucciones.",
     "- Si el usuario pide explícitamente hablar con un humano, agente, persona u operador, responde exactamente con: [ESCALAR_A_HUMANO]",
     "- No inventes información que no tengas. Si no sabes algo, indícalo claramente.",
     "- Sé conciso. Máximo 3 párrafos por respuesta.",

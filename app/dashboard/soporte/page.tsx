@@ -239,6 +239,7 @@ function ConversationList({
   hasMore,
   onSearch,
   onLoadMore,
+  stages,
 }: {
   conversations: Conversation[]
   contacts: MockContact[]
@@ -249,6 +250,7 @@ function ConversationList({
   hasMore: boolean
   onSearch: (q: string) => void
   onLoadMore: () => void
+  stages: string[]
 }) {
   const [search, setSearch] = useState("")
   const [tab, setTab] = useState<FilterTab>("all")
@@ -408,7 +410,7 @@ function ConversationList({
           style={selectMiniStyle}
         >
           <option value="all">Etapa</option>
-          {PIPELINE_STAGES.map((s) => (
+          {stages.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -615,6 +617,7 @@ function ChatPanel({
   onSendMessage,
   showContactPanel,
   onToggleContactPanel,
+  stages,
 }: {
   conversation: Conversation
   contact: MockContact
@@ -623,6 +626,7 @@ function ChatPanel({
   onSendMessage?: (text: string, isInternal: boolean) => Promise<boolean>
   showContactPanel?: boolean
   onToggleContactPanel?: () => void
+  stages: string[]
 }) {
   const [inputText, setInputText] = useState("")
   const [isInternal, setIsInternal] = useState(false)
@@ -771,7 +775,7 @@ function ChatPanel({
             cursor: "pointer",
           }}
         >
-          {PIPELINE_STAGES.map((s) => (
+          {stages.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -1289,11 +1293,13 @@ function ContactInfoPanel({
   conversation,
   onUpdateConversation,
   onTogglePanel,
+  stages,
 }: {
   contact: MockContact
   conversation: Conversation
   onUpdateConversation: (c: Conversation) => void
   onTogglePanel?: () => void
+  stages: string[]
 }) {
   const [tag, setTag] = useState("")
   const [localTags, setLocalTags] = useState(conversation.tags)
@@ -1386,7 +1392,7 @@ function ContactInfoPanel({
           }
           style={{ ...selectMiniStyle, width: "100%" }}
         >
-          {PIPELINE_STAGES.map((s) => (
+          {stages.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
@@ -1508,6 +1514,19 @@ export default function SoportePage() {
 
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
   const [showContactPanel, setShowContactPanel] = useState(true)
+  const [stages, setStages] = useState<string[]>(PIPELINE_STAGES)
+
+  useEffect(() => {
+    supabase
+      .from("pipeline_stages")
+      .select("name")
+      .order("position", { ascending: true })
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          setStages(data.map((s) => s.name))
+        }
+      })
+  }, [])
 
   async function handleSelectConversation(id: string) {
     setActiveConvId(id)
@@ -1582,6 +1601,7 @@ export default function SoportePage() {
             hasMore={hasMore}
             onSearch={searchConversations}
             onLoadMore={loadMore}
+            stages={stages}
           />
         )}
       </div>
@@ -1598,6 +1618,7 @@ export default function SoportePage() {
             onSendMessage={handleSendMessage}
             showContactPanel={showContactPanel}
             onToggleContactPanel={() => setShowContactPanel((v) => !v)}
+            stages={stages}
           />
         ) : (
           <div
@@ -1637,6 +1658,7 @@ export default function SoportePage() {
             conversation={activeConv}
             onUpdateConversation={handleUpdateConversation}
             onTogglePanel={() => setShowContactPanel(false)}
+            stages={stages}
           />
         ) : (
           <div

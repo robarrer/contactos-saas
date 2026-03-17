@@ -730,7 +730,8 @@ function StageManagerModal({
   function addStage() {
     const name = newName.trim()
     if (!name || local.some((s) => s.name === name)) return
-    setLocal([...local, { id: name, name, color: PRESET_COLORS[local.length % PRESET_COLORS.length] }])
+    const id = crypto.randomUUID()
+    setLocal([...local, { id, name, color: PRESET_COLORS[local.length % PRESET_COLORS.length] }])
     setNewName("")
   }
 
@@ -952,7 +953,6 @@ function useEmbudoData() {
   }, [])
 
   async function saveStages(newStages: StageConfig[]) {
-    // Upsert todas las etapas con su posición y agent_id
     const rows = newStages.map((s, i) => ({
       id:       s.id,
       name:     s.name,
@@ -960,7 +960,34 @@ function useEmbudoData() {
       agent_id: s.agent_id ?? null,
       position: i,
     }))
-    await supabase.from("pipeline_stages").upsert(rows, { onConflict: "id" })
+
+    const { error: upsertError } = await supabase
+      .from("pipeline_stages")
+      .upsert(rows, { onConflict: "id" })
+
+    if (upsertError) {
+      console.error("Error guardando etapas:", upsertError)
+      alert("Error guardando etapas: " + upsertError.message)
+      return
+    }
+
+    const deletedIds = stages
+      .map((s) => s.id)
+      .filter((id) => !newStages.some((s) => s.id === id))
+
+    if (deletedIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from("pipeline_stages")
+        .delete()
+        .in("id", deletedIds)
+
+      if (deleteError) {
+        console.error("Error eliminando etapas:", deleteError)
+        alert("Error eliminando etapas: " + deleteError.message)
+        return
+      }
+    }
+
     setStages(newStages)
   }
 
