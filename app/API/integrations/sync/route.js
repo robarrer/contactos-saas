@@ -7,26 +7,43 @@ function sleep(ms) {
 
 export async function POST(request) {
   try {
-    const supabase = await createSupabaseServerClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ ok: false, message: "No autenticado" }, { status: 401 })
-    }
+    const internalSecret = request.headers.get("x-internal-secret")
+    const isInternalCall = process.env.INTERNAL_API_SECRET && internalSecret === process.env.INTERNAL_API_SECRET
+
+    let integration = null
 
     const { integration_id } = await request.json()
     if (!integration_id) {
       return NextResponse.json({ ok: false, message: "integration_id es requerido" }, { status: 400 })
     }
 
-    // Usar cliente con sesión (RLS) para verificar que el usuario tiene acceso a esta integración
-    const { data: integration, error: intErr } = await supabase
-      .from("agent_integrations")
-      .select("id, platform, config, agent_id")
-      .eq("id", integration_id)
-      .single()
+    if (isInternalCall) {
+      const serviceClient = createServiceClient()
+      const { data, error } = await serviceClient
+        .from("agent_integrations")
+        .select("id, platform, config, agent_id")
+        .eq("id", integration_id)
+        .single()
+      if (error || !data) {
+        return NextResponse.json({ ok: false, message: "Integración no encontrada" }, { status: 404 })
+      }
+      integration = data
+    } else {
+      const supabase = await createSupabaseServerClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        return NextResponse.json({ ok: false, message: "No autenticado" }, { status: 401 })
+      }
 
-    if (intErr || !integration) {
-      return NextResponse.json({ ok: false, message: "Integración no encontrada" }, { status: 404 })
+      const { data, error: intErr } = await supabase
+        .from("agent_integrations")
+        .select("id, platform, config, agent_id")
+        .eq("id", integration_id)
+        .single()
+      if (intErr || !data) {
+        return NextResponse.json({ ok: false, message: "Integración no encontrada" }, { status: 404 })
+      }
+      integration = data
     }
 
     if (integration.platform !== "dentalink") {

@@ -159,7 +159,7 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
   const phone = "+" + waId
   const contactQuery = supabase
     .from("contacts")
-    .select("id, name")
+    .select("id, first_name, last_name")
     .eq("phone", phone)
   if (orgId) contactQuery.eq("organization_id", orgId)
 
@@ -167,10 +167,13 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
 
   if (!contact) {
     const displayName = waContact?.profile?.name ?? phone
+    const nameParts = displayName.trim().split(/\s+/)
+    const firstName = nameParts[0] || ""
+    const lastName  = nameParts.slice(1).join(" ") || ""
     const { data: newContact, error } = await supabase
       .from("contacts")
-      .insert({ name: displayName, phone, organization_id: orgId })
-      .select("id, name")
+      .insert({ first_name: firstName, last_name: lastName, phone, organization_id: orgId })
+      .select("id, first_name, last_name")
       .single()
 
     if (error) {

@@ -43,7 +43,7 @@ export async function execute(fnId, params, config) {
     const url = `${baseUrl}/Externo_DisponibilidadHab?${qs.toString()}`
     console.log(`[admintour] GET ${url}`)
 
-    const res = await fetch(url, { method: "GET", headers })
+    const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(15000) })
     return await handleResponse(res, fnId)
   }
 
@@ -136,6 +136,7 @@ export async function execute(fnId, params, config) {
       method:  "POST",
       headers,
       body:    JSON.stringify(body),
+      signal:  AbortSignal.timeout(15000),
     })
     return await handleResponse(res, fnId)
   }

@@ -49,7 +49,10 @@ export async function GET(request) {
       const baseUrl = getBaseUrl()
       const res = await fetch(`${baseUrl}/API/integrations/sync`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-secret": process.env.INTERNAL_API_SECRET || "",
+        },
         body: JSON.stringify({ integration_id: integration.id }),
       })
       const json = await res.json()

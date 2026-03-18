@@ -79,6 +79,7 @@ export async function execute(fnId, params, config) {
     method: fnDef.http_method,
     headers,
     body,
+    signal: AbortSignal.timeout(15000),
   })
 
   if (!res.ok) {
