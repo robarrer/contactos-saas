@@ -3,23 +3,20 @@ import { createServiceClient } from "@/app/lib/supabase-server"
 
 /**
  * Cron job ejecutado por Vercel para sincronizaciones programadas.
- * Vercel llama a este endpoint con el header Authorization: Bearer <CRON_SECRET>.
- * Configurar CRON_SECRET en las variables de entorno de Vercel.
+ * Vercel llama con header Authorization: Bearer <CRON_SECRET>.
  */
 export async function GET(request) {
-  // Validar cron secret para evitar ejecuciones no autorizadas
   const authHeader = request.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   const serviceClient = createServiceClient()
 
-  // Obtener todas las integraciones de Dentalink con sync habilitado
   const { data: integrations, error } = await serviceClient
-    .from("integrations")
-    .select("*")
+    .from("agent_integrations")
+    .select("id, platform, config, enabled, agent_id")
     .eq("platform", "dentalink")
     .eq("enabled", true)
 
@@ -48,10 +45,9 @@ export async function GET(request) {
     const interval = FREQ_MS[freq]
     if (!interval || now - lastSync < interval) continue
 
-    // Llamar al endpoint de sync
     try {
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
-      const res = await fetch(`${appUrl}/API/integrations/sync`, {
+      const baseUrl = getBaseUrl()
+      const res = await fetch(`${baseUrl}/API/integrations/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integration_id: integration.id }),
@@ -67,4 +63,10 @@ export async function GET(request) {
 
   console.log(`[cron] Sync completado — ${synced}/${integrations.length} integraciones sincronizadas`)
   return NextResponse.json({ ok: true, synced, results })
+}
+
+function getBaseUrl() {
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
+  return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
 }

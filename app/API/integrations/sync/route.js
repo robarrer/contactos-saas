@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { createServiceClient } from "@/app/lib/supabase-server"
+import { createSupabaseServerClient, createServiceClient } from "@/app/lib/supabase-server"
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
@@ -7,17 +7,21 @@ function sleep(ms) {
 
 export async function POST(request) {
   try {
+    const supabase = await createSupabaseServerClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ ok: false, message: "No autenticado" }, { status: 401 })
+    }
+
     const { integration_id } = await request.json()
     if (!integration_id) {
       return NextResponse.json({ ok: false, message: "integration_id es requerido" }, { status: 400 })
     }
 
-    const serviceClient = createServiceClient()
-
-    // Obtener la integración con credenciales
-    const { data: integration, error: intErr } = await serviceClient
-      .from("integrations")
-      .select("*")
+    // Usar cliente con sesión (RLS) para verificar que el usuario tiene acceso a esta integración
+    const { data: integration, error: intErr } = await supabase
+      .from("agent_integrations")
+      .select("id, platform, config, agent_id")
       .eq("id", integration_id)
       .single()
 
@@ -25,19 +29,30 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, message: "Integración no encontrada" }, { status: 404 })
     }
 
+    if (integration.platform !== "dentalink") {
+      return NextResponse.json({ ok: false, message: "La sincronización solo está disponible para Dentalink." }, { status: 400 })
+    }
+
     const { api_token, api_url } = integration.config ?? {}
     if (!api_token) {
       return NextResponse.json({ ok: false, message: "Token de API no configurado" }, { status: 400 })
     }
 
-    const baseUrl = (api_url || "https://api.dentalink.healthatom.com/api/v1").replace(/\/$/, "")
-    const orgId = integration.organization_id
+    // Obtener organization_id a través del agente
+    const serviceClient = createServiceClient()
+    const { data: agent } = await serviceClient
+      .from("agents")
+      .select("organization_id")
+      .eq("id", integration.agent_id)
+      .single()
 
+    const orgId = agent?.organization_id
     if (!orgId) {
       return NextResponse.json({ ok: false, message: "La integración no tiene organización asignada." }, { status: 400 })
     }
 
-    // Fetch paginado de pacientes desde Dentalink (límite 400 por ejecución para evitar timeout en Vercel)
+    const baseUrl = (api_url || "https://api.dentalink.healthatom.com/api/v1").replace(/\/$/, "")
+
     const MAX_PATIENTS_PER_RUN = 400
     const allPatients = []
     let nextUrl = `${baseUrl}/pacientes`
@@ -65,7 +80,7 @@ export async function POST(request) {
         }
         const retryAfter = res.headers.get("Retry-After")
         const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 8000
-        console.log(`[sync] Rate limit 429, esperando ${waitMs}ms antes de reintentar (${retry429}/${MAX_RETRY_429})`)
+        console.log(`[sync] Rate limit 429, esperando ${waitMs}ms (${retry429}/${MAX_RETRY_429})`)
         await sleep(waitMs)
         continue
       }
@@ -96,7 +111,6 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, total: 0, created: 0, updated: 0, message: "No se encontraron pacientes en Dentalink." })
     }
 
-    // Normalizar teléfono para matching (Chile: 912345678 o 56912345678 -> +56912345678)
     function normalizePhone(raw) {
       const s = String(raw ?? "").trim().replace(/\D/g, "")
       if (!s) return ""
@@ -106,7 +120,6 @@ export async function POST(request) {
       return ""
     }
 
-    // Mapear pacientes Dentalink → contactos (email null si vacío para evitar violar unique constraint)
     const contacts = allPatients.map((p) => {
       const rawPhone = (p.celular || p.telefono || "").toString().trim()
       const phone = normalizePhone(rawPhone) || rawPhone
@@ -122,7 +135,6 @@ export async function POST(request) {
       }
     })
 
-    // Obtener contactos existentes y indexar por teléfono/email normalizado
     const existingByPhone = new Map()
     const existingByEmail = new Map()
     const { data: existing } = await serviceClient
@@ -172,19 +184,17 @@ export async function POST(request) {
     let updated = 0
     let firstError = null
 
-    // Inserts en lotes de 50
     for (let i = 0; i < toInsert.length; i += 50) {
       const batch = toInsert.slice(i, i + 50)
       const { error } = await serviceClient.from("contacts").insert(batch)
       if (error) {
         if (!firstError) firstError = error.message
-        console.error("[sync] Insert error:", error.message, "batch sample:", JSON.stringify(batch[0]))
+        console.error("[sync] Insert error:", error.message)
       } else {
         created += batch.length
       }
     }
 
-    // Updates en lotes paralelos de 20
     for (let i = 0; i < toUpdate.length; i += 20) {
       const batch = toUpdate.slice(i, i + 20)
       const results = await Promise.all(
@@ -206,14 +216,14 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, message: `Error al guardar: ${firstError}` }, { status: 502 })
     }
 
-    // Actualizar config con last_sync_at y last_sync_count
+    // Actualizar config con last_sync_at
     const updatedConfig = {
       ...integration.config,
       last_sync_at: new Date().toISOString(),
       last_sync_count: created + updated,
     }
     await serviceClient
-      .from("integrations")
+      .from("agent_integrations")
       .update({ config: updatedConfig })
       .eq("id", integration_id)
 
