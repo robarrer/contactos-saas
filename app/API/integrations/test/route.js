@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server"
+import { createSupabaseServerClient } from "@/app/lib/supabase-server"
 
 export async function POST(request) {
   try {
+    const supabase = await createSupabaseServerClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ ok: false, message: "No autenticado" }, { status: 401 })
+    }
+
     const body = await request.json()
     const { platform } = body
 
