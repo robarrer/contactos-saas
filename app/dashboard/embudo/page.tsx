@@ -11,6 +11,7 @@ import {
   type Conversation,
   type MockContact,
   type PipelineStage,
+  contactFullName,
 } from "../soporte/mockData"
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ function useFilteredConversations(
     if (!contact) return false
     if (filters.search) {
       const q = filters.search.toLowerCase()
-      if (!contact.name.toLowerCase().includes(q) && !conv.lastMessage.toLowerCase().includes(q)) return false
+      if (!contactFullName(contact).toLowerCase().includes(q) && !conv.lastMessage.toLowerCase().includes(q)) return false
     }
     if (filters.channel !== "all" && conv.channel !== filters.channel) return false
     if (filters.agentId !== "all" && conv.assignedAgentId !== filters.agentId) return false
@@ -350,8 +351,8 @@ function ListView({
     let av = "", bv = ""
     if (sortCol === "lastActivityAt") { av = a.lastActivityAt; bv = b.lastActivityAt }
     if (sortCol === "contactName") {
-      av = contacts.find((c) => c.id === a.contactId)?.name ?? ""
-      bv = contacts.find((c) => c.id === b.contactId)?.name ?? ""
+      av = contactFullName(contacts.find((c) => c.id === a.contactId))
+      bv = contactFullName(contacts.find((c) => c.id === b.contactId))
     }
     if (sortCol === "pipelineStage") { av = a.pipelineStage; bv = b.pipelineStage }
     if (sortCol === "botStatus") { av = a.botStatus; bv = b.botStatus }
@@ -462,10 +463,10 @@ function ListView({
                 <td style={td}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <div style={{ position: "relative" }}>
-                      <Avatar name={contact?.name ?? "?"} color={contactColor(contact?.id ?? conv.contactId)} size={32} />
+                      <Avatar name={contactFullName(contact, "?")} color={contactColor(contact?.id ?? conv.contactId)} size={32} />
                       {hasUnread && <span style={{ position: "absolute", top: -2, right: -2, width: 8, height: 8, borderRadius: "50%", background: "#22c55e", border: "1.5px solid white" }} />}
                     </div>
-                    <span style={{ fontSize: 13, fontWeight: hasUnread ? 700 : 500, color: "#111827" }}>{contact?.name ?? "Contacto"}</span>
+                    <span style={{ fontSize: 13, fontWeight: hasUnread ? 700 : 500, color: "#111827" }}>{contactFullName(contact)}</span>
                   </div>
                 </td>
                 <td style={{ ...td, maxWidth: 220 }}>
@@ -634,10 +635,10 @@ function KanbanCard({
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <div style={{ position: "relative" }}>
-          <Avatar name={contact?.name ?? "?"} color={contactColor(contact?.id ?? conv.contactId)} size={30} />
+          <Avatar name={contactFullName(contact, "?")} color={contactColor(contact?.id ?? conv.contactId)} size={30} />
           {hasUnread && <span style={{ position: "absolute", top: -2, right: -2, width: 8, height: 8, borderRadius: "50%", background: "#22c55e", border: "1.5px solid white" }} />}
         </div>
-        <span style={{ fontWeight: hasUnread ? 700 : 600, fontSize: 13, flex: 1, color: "#111827" }}>{contact?.name ?? "Contacto"}</span>
+        <span style={{ fontWeight: hasUnread ? 700 : 600, fontSize: 13, flex: 1, color: "#111827" }}>{contactFullName(contact)}</span>
         <ChannelIcon channel={conv.channel} size={13} />
       </div>
 
@@ -917,7 +918,7 @@ function useEmbudoData() {
   const load = useCallback(async () => {
     const { data, error } = await supabase
       .from("conversations")
-      .select("*, contacts(id, name, phone, email, company, status, created_at)")
+      .select("*, contacts(id, first_name, last_name, phone, email, company, status, created_at)")
       .eq("status", "open")
       .order("last_activity", { ascending: false })
 
@@ -942,8 +943,8 @@ function useEmbudoData() {
         tags:            [],
       })
       if (row.contacts && !seen.has(row.contact_id)) {
-        const c = row.contacts as { id: string; name: string; phone: string | null; created_at: string }
-        ctcts.push({ id: c.id, name: c.name, phone: c.phone ?? undefined, channels: ["whatsapp"], createdAt: c.created_at, totalConversations: 1 })
+        const c = row.contacts as { id: string; first_name: string; last_name: string; phone: string | null; created_at: string }
+        ctcts.push({ id: c.id, first_name: c.first_name ?? "", last_name: c.last_name ?? "", phone: c.phone ?? undefined, channels: ["whatsapp"], createdAt: c.created_at, totalConversations: 1 })
         seen.add(row.contact_id)
       }
     }

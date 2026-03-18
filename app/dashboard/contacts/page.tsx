@@ -5,11 +5,18 @@ import { supabase } from "@/app/lib/supabase"
 
 type Contact = {
   id?: string
-  name: string
+  first_name: string
+  last_name: string
   email: string
   phone: string
   company: string
   status: string
+}
+
+function contactFullName(c: Contact | null | undefined, fallback = "Contacto"): string {
+  if (!c) return fallback
+  const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim()
+  return full || fallback
 }
 
 type MetaTemplate = {
@@ -37,7 +44,7 @@ function countTemplateVariables(template: MetaTemplate): number {
 }
 
 function buildParametersForContact(contact: Contact, varCount: number): string[] {
-  const pool = [contact.name, contact.email, contact.phone, contact.company, contact.status]
+  const pool = [contactFullName(contact), contact.email, contact.phone, contact.company, contact.status]
   return Array.from({ length: varCount }, (_, i) => pool[i] ?? `variable_${i + 1}`)
 }
 
@@ -45,7 +52,7 @@ function renderTemplateText(template: MetaTemplate, contact: Contact): string {
   const bodyComp = template.components?.find((c) => c.type.toUpperCase() === "BODY")
   let text = getComponentText(bodyComp)
   if (!text) return template.name
-  const pool = [contact.name, contact.email, contact.phone, contact.company, contact.status]
+  const pool = [contactFullName(contact), contact.email, contact.phone, contact.company, contact.status]
   return text.replace(/\{\{(\d+)\}\}/g, (_, n) => pool[parseInt(n) - 1] ?? `{{${n}}}`)
 }
 
@@ -68,7 +75,7 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   "Prospecto": { bg: "#fef3c7", color: "#92400e" },
 }
 
-type SortCol = "name" | "email" | "phone" | "company" | "status"
+type SortCol = "first_name" | "email" | "phone" | "company" | "status"
 type SortDir = "asc" | "desc"
 
 export default function ContactsPage() {
@@ -76,12 +83,12 @@ export default function ContactsPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [sortCol, setSortCol] = useState<SortCol>("name")
+  const [sortCol, setSortCol] = useState<SortCol>("first_name")
   const [sortDir, setSortDir] = useState<SortDir>("asc")
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(() => new Set())
   const selectAllRef = useRef<HTMLInputElement>(null)
   const [editingContactId, setEditingContactId] = useState<string | null>(null)
-  const [form, setForm] = useState<Contact>({ name: "", email: "", phone: "", company: "", status: "" })
+  const [form, setForm] = useState<Contact>({ first_name: "", last_name: "", email: "", phone: "", company: "", status: "" })
   const [showForm, setShowForm] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [availableTemplates, setAvailableTemplates] = useState<MetaTemplate[]>([])
@@ -100,7 +107,7 @@ export default function ContactsPage() {
 
   useEffect(() => { loadContacts() }, [])
 
-  const contactKey = (c: Contact) => c.id ?? `${c.email}|${c.phone}|${c.name}`
+  const contactKey = (c: Contact) => c.id ?? `${c.email}|${c.phone}|${c.first_name}|${c.last_name}`
 
   const allContactIds = useMemo(() => contacts.map((c) => c.id).filter(Boolean) as string[], [contacts])
   const allSelected = allContactIds.length > 0 && allContactIds.every((id) => selectedContactIds.has(id))
@@ -115,7 +122,7 @@ export default function ContactsPage() {
   const filtered = useMemo(() => {
     let list = contacts.filter((c) => {
       const q = search.toLowerCase()
-      const matchSearch = !q || c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
+      const matchSearch = !q || contactFullName(c).toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
       const matchStatus = statusFilter === "all" || c.status === statusFilter
       return matchSearch && matchStatus
     })
@@ -149,7 +156,7 @@ export default function ContactsPage() {
     setForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  function resetForm() { setForm({ name: "", email: "", phone: "", company: "", status: "" }); setEditingContactId(null) }
+  function resetForm() { setForm({ first_name: "", last_name: "", email: "", phone: "", company: "", status: "" }); setEditingContactId(null) }
   function closeModal() { setShowForm(false); resetForm() }
 
   useEffect(() => {
@@ -163,17 +170,17 @@ export default function ContactsPage() {
   function startEditing(contact: Contact) {
     if (!contact.id) return
     setEditingContactId(contact.id)
-    setForm({ id: contact.id, name: contact.name ?? "", email: contact.email ?? "", phone: contact.phone ?? "", company: contact.company ?? "", status: contact.status ?? "" })
+    setForm({ id: contact.id, first_name: contact.first_name ?? "", last_name: contact.last_name ?? "", email: contact.email ?? "", phone: contact.phone ?? "", company: contact.company ?? "", status: contact.status ?? "" })
     setShowForm(true)
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.name.trim() || !form.email.trim() || !form.phone.trim() || !form.company.trim() || !form.status.trim()) {
+    if (!form.first_name.trim() || !form.email.trim() || !form.phone.trim() || !form.company.trim() || !form.status.trim()) {
       alert("Completa todos los campos"); return
     }
     const { error } = editingContactId
-      ? await supabase.from("contacts").update({ name: form.name, email: form.email, phone: form.phone, company: form.company, status: form.status }).eq("id", editingContactId)
+      ? await supabase.from("contacts").update({ first_name: form.first_name, last_name: form.last_name, email: form.email, phone: form.phone, company: form.company, status: form.status }).eq("id", editingContactId)
       : await supabase.from("contacts").insert([form])
     if (error) { alert((editingContactId ? "Error actualizando: " : "Error guardando: ") + error.message); return }
     resetForm(); setShowForm(false); loadContacts()
@@ -230,14 +237,25 @@ export default function ContactsPage() {
     if (lines.length < 2) { alert("El CSV debe tener encabezado y al menos un contacto."); return }
     const sep = lines[0].includes(";") ? ";" : ","
     const headers = lines[0].split(sep).map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ""))
-    const missing = ["name","email","phone","company","status"].filter((h) => !headers.includes(h))
+    const hasName = headers.includes("name")
+    const hasFirstName = headers.includes("first_name")
+    if (!hasName && !hasFirstName) { alert("Faltan columnas: name o first_name"); return }
+    const missing = ["email","phone","company","status"].filter((h) => !headers.includes(h))
     if (missing.length) { alert(`Faltan columnas: ${missing.join(", ")}`); return }
     const parsed: Contact[] = []; const skipped: number[] = []
     for (let i = 0; i < lines.length - 1; i++) {
       const cols = lines[i+1].split(sep).map((c) => c.trim().replace(/^"|"$/g, ""))
       const row: Record<string, string> = {}; headers.forEach((h, idx) => { row[h] = cols[idx] ?? "" })
-      if (!row.name || !row.email || !row.phone) { skipped.push(i + 2); continue }
-      parsed.push({ name: row.name, email: row.email, phone: row.phone, company: row.company ?? "", status: row.status ?? "" })
+      // Compatibilidad: acepta columna "name" (la divide) o "first_name"/"last_name"
+      let firstName = row.first_name ?? ""
+      let lastName  = row.last_name  ?? ""
+      if (!firstName && row.name) {
+        const parts = row.name.trim().split(/\s+/)
+        firstName = parts[0] ?? ""
+        lastName  = parts.slice(1).join(" ")
+      }
+      if (!firstName || !row.email || !row.phone) { skipped.push(i + 2); continue }
+      parsed.push({ first_name: firstName, last_name: lastName, email: row.email, phone: row.phone, company: row.company ?? "", status: row.status ?? "" })
     }
     if (!parsed.length) { alert("No hay filas válidas."); return }
     setImportingCsv(true)
@@ -382,7 +400,7 @@ export default function ContactsPage() {
                       style={{ accentColor: "#2563eb", cursor: "pointer" }}
                     />
                   </th>
-                  <th style={{ ...th, cursor: "pointer" }} onClick={() => toggleSort("name")}>Nombre <SortArrow col="name" /></th>
+                  <th style={{ ...th, cursor: "pointer" }} onClick={() => toggleSort("first_name")}>Nombre <SortArrow col="first_name" /></th>
                   <th style={{ ...th, cursor: "pointer" }} onClick={() => toggleSort("email")}>Correo <SortArrow col="email" /></th>
                   <th style={{ ...th, cursor: "pointer" }} onClick={() => toggleSort("phone")}>Teléfono <SortArrow col="phone" /></th>
                   <th style={{ ...th, cursor: "pointer" }} onClick={() => toggleSort("company")}>Empresa <SortArrow col="company" /></th>
@@ -407,7 +425,7 @@ export default function ContactsPage() {
                           checked={isSelected}
                           disabled={!contact.id}
                           onChange={(e) => contact.id && toggleOne(contact.id, e.target.checked)}
-                          aria-label={`Seleccionar ${contact.name}`}
+                          aria-label={`Seleccionar ${contactFullName(contact)}`}
                           style={{ accentColor: "#2563eb", cursor: "pointer" }}
                         />
                       </td>
@@ -417,13 +435,13 @@ export default function ContactsPage() {
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div style={{
                             width: 32, height: 32, borderRadius: "50%",
-                            background: avatarColor(contact.id ?? contact.name),
+                            background: avatarColor(contact.id ?? contactFullName(contact)),
                             color: "white", display: "flex", alignItems: "center",
                             justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0,
                           }}>
-                            {initials(contact.name)}
+                            {initials(contactFullName(contact))}
                           </div>
-                          <span style={{ fontWeight: 500, fontSize: 13, color: "#111827" }}>{contact.name}</span>
+                          <span style={{ fontWeight: 500, fontSize: 13, color: "#111827" }}>{contactFullName(contact)}</span>
                         </div>
                       </td>
 
@@ -447,7 +465,7 @@ export default function ContactsPage() {
                         <button
                           type="button"
                           onClick={() => startEditing(contact)}
-                          aria-label={`Editar ${contact.name}`}
+                          aria-label={`Editar ${contactFullName(contact)}`}
                           title="Editar"
                           style={{ background: "transparent", border: "1px solid #e5e7eb", padding: "5px 9px", borderRadius: 7, cursor: "pointer", color: "#6b7280", display: "inline-flex", alignItems: "center" }}
                           onMouseEnter={(e) => { e.currentTarget.style.background = "#f3f4f6" }}
@@ -478,7 +496,8 @@ export default function ContactsPage() {
             </div>
             <form onSubmit={handleSubmit}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <input type="text" name="name" placeholder="Nombre" value={form.name} onChange={handleChange} style={inputStyle} autoFocus />
+                <input type="text" name="first_name" placeholder="Nombre" value={form.first_name} onChange={handleChange} style={inputStyle} autoFocus />
+                <input type="text" name="last_name" placeholder="Apellido" value={form.last_name} onChange={handleChange} style={inputStyle} />
                 <input type="email" name="email" placeholder="Correo" value={form.email} onChange={handleChange} style={inputStyle} />
                 <input type="text" name="phone" placeholder="Teléfono" value={form.phone} onChange={handleChange} style={inputStyle} />
                 <input type="text" name="company" placeholder="Empresa" value={form.company} onChange={handleChange} style={inputStyle} />

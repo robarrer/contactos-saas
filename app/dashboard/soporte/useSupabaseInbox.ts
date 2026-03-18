@@ -39,7 +39,8 @@ type DbMessage = {
 
 type DbContact = {
   id: string
-  name: string
+  first_name: string
+  last_name: string
   phone: string | null
   email: string | null
   company: string | null
@@ -101,7 +102,8 @@ function mapMessage(db: DbMessage): Message {
 function mapContact(db: DbContact): MockContact {
   return {
     id:                 db.id,
-    name:               db.name,
+    first_name:         db.first_name ?? "",
+    last_name:          db.last_name  ?? "",
     phone:              db.phone ?? undefined,
     channels:           ["whatsapp"],
     createdAt:          db.created_at,
@@ -139,7 +141,7 @@ export function useSupabaseInbox() {
     // Búsqueda en last_message directamente
     let msgQuery = supabase
       .from("conversations")
-      .select("*, contacts(id, name, phone, email, company, status, created_at)")
+      .select("*, contacts(id, first_name, last_name, phone, email, company, status, created_at)")
       .eq("status", "open")
       .order("last_activity", { ascending: false })
       .range(from, to)
@@ -154,7 +156,7 @@ export function useSupabaseInbox() {
       const { data: matchedContacts } = await supabase
         .from("contacts")
         .select("id")
-        .ilike("name", `%${search}%`)
+        .or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%`)
       contactIds = (matchedContacts ?? []).map((c: { id: string }) => c.id)
     }
 
@@ -163,7 +165,7 @@ export function useSupabaseInbox() {
     if (search && contactIds.length > 0) {
       const { data } = await supabase
         .from("conversations")
-        .select("*, contacts(id, name, phone, email, company, status, created_at)")
+        .select("*, contacts(id, first_name, last_name, phone, email, company, status, created_at)")
         .eq("status", "open")
         .in("contact_id", contactIds)
         .order("last_activity", { ascending: false })

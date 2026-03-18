@@ -13,12 +13,20 @@ export type Agent = {
 
 export type MockContact = {
   id: string
-  name: string
+  first_name: string
+  last_name: string
   phone?: string
   username?: string
   channels: Channel[]
   createdAt: string
   totalConversations: number
+}
+
+/** Helper para obtener el nombre completo de un contacto */
+export function contactFullName(c: MockContact | undefined | null, fallback = "Contacto"): string {
+  if (!c) return fallback
+  const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim()
+  return full || fallback
 }
 
 export type Message = {
@@ -62,102 +70,18 @@ export const PIPELINE_STAGES: PipelineStage[] = [
 ]
 
 export const MOCK_CONTACTS: MockContact[] = [
-  {
-    id: "c1",
-    name: "Valentina Torres",
-    phone: "+56912345678",
-    channels: ["whatsapp"],
-    createdAt: "2024-11-10",
-    totalConversations: 3,
-  },
-  {
-    id: "c2",
-    name: "Matías Hernández",
-    phone: "+56923456789",
-    channels: ["whatsapp", "instagram"],
-    createdAt: "2024-12-01",
-    totalConversations: 2,
-  },
-  {
-    id: "c3",
-    name: "Camila Muñoz",
-    username: "@camila.munoz",
-    channels: ["instagram"],
-    createdAt: "2025-01-15",
-    totalConversations: 1,
-  },
-  {
-    id: "c4",
-    name: "Diego Soto",
-    phone: "+56934567890",
-    channels: ["whatsapp"],
-    createdAt: "2025-01-20",
-    totalConversations: 4,
-  },
-  {
-    id: "c5",
-    name: "Isidora Vargas",
-    phone: "+56945678901",
-    channels: ["whatsapp"],
-    createdAt: "2025-02-03",
-    totalConversations: 1,
-  },
-  {
-    id: "c6",
-    name: "Sebastián Fuentes",
-    username: "@seba.fuentes",
-    channels: ["instagram"],
-    createdAt: "2025-02-14",
-    totalConversations: 2,
-  },
-  {
-    id: "c7",
-    name: "Javiera Pérez",
-    phone: "+56956789012",
-    channels: ["whatsapp"],
-    createdAt: "2025-02-28",
-    totalConversations: 1,
-  },
-  {
-    id: "c8",
-    name: "Nicolás Castro",
-    phone: "+56967890123",
-    channels: ["whatsapp"],
-    createdAt: "2025-03-01",
-    totalConversations: 2,
-  },
-  {
-    id: "c9",
-    name: "Antonia Ramírez",
-    username: "@antonia.r",
-    channels: ["instagram"],
-    createdAt: "2025-03-05",
-    totalConversations: 1,
-  },
-  {
-    id: "c10",
-    name: "Felipe Morales",
-    phone: "+56978901234",
-    channels: ["whatsapp"],
-    createdAt: "2025-03-08",
-    totalConversations: 1,
-  },
-  {
-    id: "c11",
-    name: "Constanza Navarro",
-    phone: "+56989012345",
-    channels: ["whatsapp"],
-    createdAt: "2025-03-09",
-    totalConversations: 1,
-  },
-  {
-    id: "c12",
-    name: "Tomás Ibáñez",
-    username: "@tomas.ib",
-    channels: ["instagram"],
-    createdAt: "2025-03-10",
-    totalConversations: 1,
-  },
+  { id: "c1",  first_name: "Valentina", last_name: "Torres",   phone: "+56912345678", channels: ["whatsapp"],              createdAt: "2024-11-10", totalConversations: 3 },
+  { id: "c2",  first_name: "Matías",    last_name: "Hernández", phone: "+56923456789", channels: ["whatsapp", "instagram"], createdAt: "2024-12-01", totalConversations: 2 },
+  { id: "c3",  first_name: "Camila",    last_name: "Muñoz",    username: "@camila.munoz", channels: ["instagram"],         createdAt: "2025-01-15", totalConversations: 1 },
+  { id: "c4",  first_name: "Diego",     last_name: "Soto",     phone: "+56934567890", channels: ["whatsapp"],              createdAt: "2025-01-20", totalConversations: 4 },
+  { id: "c5",  first_name: "Isidora",   last_name: "Vargas",   phone: "+56945678901", channels: ["whatsapp"],              createdAt: "2025-02-03", totalConversations: 1 },
+  { id: "c6",  first_name: "Sebastián", last_name: "Fuentes",  username: "@seba.fuentes", channels: ["instagram"],        createdAt: "2025-02-14", totalConversations: 2 },
+  { id: "c7",  first_name: "Javiera",   last_name: "Pérez",    phone: "+56956789012", channels: ["whatsapp"],              createdAt: "2025-02-28", totalConversations: 1 },
+  { id: "c8",  first_name: "Nicolás",   last_name: "Castro",   phone: "+56967890123", channels: ["whatsapp"],              createdAt: "2025-03-01", totalConversations: 2 },
+  { id: "c9",  first_name: "Antonia",   last_name: "Ramírez",  username: "@antonia.r", channels: ["instagram"],           createdAt: "2025-03-05", totalConversations: 1 },
+  { id: "c10", first_name: "Felipe",    last_name: "Morales",  phone: "+56978901234", channels: ["whatsapp"],              createdAt: "2025-03-08", totalConversations: 1 },
+  { id: "c11", first_name: "Constanza", last_name: "Navarro",  phone: "+56989012345", channels: ["whatsapp"],              createdAt: "2025-03-09", totalConversations: 1 },
+  { id: "c12", first_name: "Tomás",     last_name: "Ibáñez",   username: "@tomas.ib", channels: ["instagram"],            createdAt: "2025-03-10", totalConversations: 1 },
 ]
 
 export const MOCK_CONVERSATIONS: Conversation[] = [

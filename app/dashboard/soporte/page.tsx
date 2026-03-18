@@ -11,6 +11,7 @@ import {
   type Message,
   type MockContact,
   type PipelineStage,
+  contactFullName,
 } from "./mockData"
 import { useSupabaseInbox } from "./useSupabaseInbox"
 
@@ -449,7 +450,7 @@ function ConversationList({
               }}
             >
               <div style={{ position: "relative", flexShrink: 0 }}>
-                <Avatar name={contact.name} color={contactColor(contact.id)} size={40} />
+                <Avatar name={contactFullName(contact, "?")} color={contactColor(contact.id)} size={40} />
                 <span
                   style={{
                     position: "absolute",
@@ -467,8 +468,8 @@ function ConversationList({
 
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4 }}>
-                  <span style={{ fontWeight: 600, fontSize: 13, color: "#111827", truncate: true } as React.CSSProperties}>
-                    {contact.name}
+                    <span style={{ fontWeight: 600, fontSize: 13, color: "#111827", truncate: true } as React.CSSProperties}>
+                    {contactFullName(contact)}
                   </span>
                   <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     <MetaWindowTimer channel={conv.channel} lastInboundAt={conv.lastInboundAt} compact />
@@ -731,10 +732,10 @@ function ChatPanel({
           flexShrink: 0,
         }}
       >
-        <Avatar name={contact.name} color={contactColor(contact.id)} size={34} />
+        <Avatar name={contactFullName(contact, "?")} color={contactColor(contact.id)} size={34} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>{contact.name}</span>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{contactFullName(contact)}</span>
             <ChannelIcon channel={conversation.channel} size={14} />
           </div>
           <div style={{ fontSize: 12, color: "#6b7280" }}>
@@ -1377,9 +1378,9 @@ function ContactInfoPanel({
             </svg>
           </button>
         )}
-        <Avatar name={contact.name} color={contactColor(contact.id)} size={56} />
+        <Avatar name={contactFullName(contact, "?")} color={contactColor(contact.id)} size={56} />
         <div style={{ marginTop: 8 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>{contact.name}</div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{contactFullName(contact)}</div>
           {contact.phone && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{contact.phone}</div>}
           {contact.username && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{contact.username}</div>}
         </div>
