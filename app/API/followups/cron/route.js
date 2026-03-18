@@ -51,8 +51,11 @@ export async function GET(request) {
   }
 
   if (!conversations?.length) {
+    console.log("[followups/cron] Sin conversaciones con last_bot_at en las últimas 24h")
     return NextResponse.json({ ok: true, processed: 0, message: "Sin conversaciones pendientes" })
   }
+
+  console.log(`[followups/cron] Procesando ${conversations.length} conversación(es) candidata(s)`)
 
   let triggered = 0
   let skipped   = 0
@@ -61,6 +64,7 @@ export async function GET(request) {
   for (const conv of conversations) {
     // Si el contacto respondió después del último bot message, no hay seguimiento pendiente
     if (conv.last_inbound_at && conv.last_inbound_at >= conv.last_bot_at) {
+      console.log(`[followups/cron] Conv=${conv.id} saltada — el contacto respondió después del bot (last_inbound_at=${conv.last_inbound_at} >= last_bot_at=${conv.last_bot_at})`)
       skipped++
       continue
     }
@@ -69,27 +73,66 @@ export async function GET(request) {
     const elapsedMin    = (now.getTime() - lastBotAt.getTime()) / 60000
     const followupSent  = Array.isArray(conv.followup_sent) ? conv.followup_sent : []
 
-    // Buscar el agente de esta conversación
-    const { data: stageRow } = await supabase
-      .from("pipeline_stages")
-      .select("agent_id")
-      .eq("name", conv.pipeline_stage)
-      .order("position", { ascending: true })
-      .limit(1)
-      .maybeSingle()
+    console.log(`[followups/cron] Conv=${conv.id} stage="${conv.pipeline_stage}" elapsed=${Math.round(elapsedMin)}min followup_sent=${JSON.stringify(followupSent)}`)
 
-    if (!stageRow?.agent_id) { skipped++; continue }
+    // Buscar el agente de esta conversación (por etapa del pipeline)
+    let agent = null
 
-    const { data: agent } = await supabase
-      .from("agents")
-      .select("id, name, followups")
-      .eq("id", stageRow.agent_id)
-      .eq("active", true)
-      .maybeSingle()
+    if (conv.pipeline_stage) {
+      const { data: stageRow } = await supabase
+        .from("pipeline_stages")
+        .select("agent_id")
+        .eq("name", conv.pipeline_stage)
+        .order("position", { ascending: true })
+        .limit(1)
+        .maybeSingle()
 
-    if (!agent?.followups?.length) { skipped++; continue }
+      if (stageRow?.agent_id) {
+        const { data: stageAgent } = await supabase
+          .from("agents")
+          .select("id, name, followups")
+          .eq("id", stageRow.agent_id)
+          .eq("active", true)
+          .maybeSingle()
+        agent = stageAgent ?? null
+      }
 
-    // Calcular tiempo acumulado de cada followup y verificar si es debido
+      if (!agent) {
+        console.warn(`[followups/cron] Etapa "${conv.pipeline_stage}" sin agente activo en conv=${conv.id} — intentando fallback`)
+      }
+    }
+
+    // Fallback: primer agente activo de la organización (mismo comportamiento que agent-reply)
+    if (!agent && conv.organization_id) {
+      const { data: fallbackAgent } = await supabase
+        .from("agents")
+        .select("id, name, followups")
+        .eq("active", true)
+        .eq("organization_id", conv.organization_id)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      agent = fallbackAgent ?? null
+      if (agent) {
+        console.log(`[followups/cron] Fallback → agente="${agent.name}" conv=${conv.id}`)
+      }
+    }
+
+    if (!agent) {
+      console.warn(`[followups/cron] Sin agente activo para conv=${conv.id} org=${conv.organization_id} stage="${conv.pipeline_stage}" — saltando`)
+      skipped++
+      continue
+    }
+
+    if (!agent.followups?.length) {
+      console.log(`[followups/cron] Agente "${agent.name}" sin seguimientos configurados — conv=${conv.id} saltando`)
+      skipped++
+      continue
+    }
+
+    // Calcular tiempo acumulado de cada followup y verificar si es debido.
+    // Los delays son ACUMULATIVOS desde el mensaje original del bot (last_bot_at),
+    // no desde el último seguimiento enviado.
     let cumulativeMin = 0
     for (let i = 0; i < agent.followups.length; i++) {
       const fu = agent.followups[i]
@@ -101,8 +144,11 @@ export async function GET(request) {
       // Ya enviado en este ciclo
       if (followupSent.includes(i)) continue
 
-      // Aún no es el momento
-      if (elapsedMin < cumulativeMin) break // los siguientes tampoco serán debido (son acumulativos)
+      // Aún no es el momento (break: los siguientes tampoco lo serán, los delays son acumulativos)
+      if (elapsedMin < cumulativeMin) {
+        console.log(`[followups/cron] Seguimiento ${i + 1} aún no debido — conv=${conv.id} elapsed=${Math.round(elapsedMin)}min necesita=${cumulativeMin}min`)
+        break
+      }
 
       // Este followup es debido — disparar solo uno por ejecución del cron para no saturar
       console.log(`[followups/cron] Disparando followup ${i} conv=${conv.id} elapsed=${Math.round(elapsedMin)}min cumulative=${cumulativeMin}min objective="${fu.objective}"`)
@@ -181,22 +227,25 @@ export async function GET(request) {
             status:          sentOk ? "sent" : "failed",
           })
 
-          // Marcar este followup como enviado y actualizar last_bot_at
+          // Marcar este followup como enviado.
+          // NO actualizamos last_bot_at: debe mantenerse como el tiempo del mensaje
+          // original del bot para que los delays acumulativos se calculen correctamente.
+          // Si actualizáramos last_bot_at aquí, cada seguimiento resetearía el reloj
+          // y los siguientes se retrasarían innecesariamente.
           const newSent = [...followupSent, i]
           await supabase
             .from("conversations")
             .update({
-              last_message:   data.text,
-              last_activity:  sentAt,
-              last_bot_at:    sentAt,
-              followup_sent:  newSent,
+              last_message:  data.text,
+              last_activity: sentAt,
+              followup_sent: newSent,
             })
             .eq("id", conv.id)
 
           triggered++
           results.push({ conv_id: conv.id, followup: i + 1, ok: sentOk })
         } else {
-          console.warn(`[followups/cron] agent-reply no generó reply para conv=${conv.id}:`, data?.action)
+          console.warn(`[followups/cron] agent-reply no generó reply para conv=${conv.id}: action=${data?.action} reason=${data?.reason ?? "-"}`)
           skipped++
         }
       } catch (err) {
