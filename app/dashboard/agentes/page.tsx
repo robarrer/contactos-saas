@@ -6,6 +6,13 @@ import { INTEGRATIONS_CATALOG } from "@/app/lib/integrations/catalog"
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
+type Followup = {
+  delay_hours: number
+  delay_minutes: number
+  objective: string
+  enabled: boolean
+}
+
 type Agent = {
   id?: string
   name: string
@@ -14,6 +21,7 @@ type Agent = {
   active: boolean
   llm_provider: "openai" | "anthropic"
   llm_model: string
+  followups?: Followup[]
   created_at?: string
 }
 
@@ -348,6 +356,362 @@ function PlatformConfig({
   )
 }
 
+// ─── FollowupsTab: seguimientos automáticos ────────────────────────────────────
+
+const MAX_FOLLOWUPS = 6
+const MAX_WINDOW_MINUTES = 24 * 60 // 1440 min = 24h Meta window
+
+function followupToMinutes(f: Followup): number {
+  return (f.delay_hours || 0) * 60 + (f.delay_minutes || 0)
+}
+
+function formatTime(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (h === 0) return `${m}min`
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}min`
+}
+
+function FollowupsTab({
+  agentId,
+  followups,
+  onChange,
+}: {
+  agentId: string
+  followups: Followup[]
+  onChange: (f: Followup[]) => void
+}) {
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+
+  const cumulativeMinutes = followups.reduce((sum, f) => sum + (f.enabled ? followupToMinutes(f) : 0), 0)
+  const usedPercent       = Math.min(100, (cumulativeMinutes / MAX_WINDOW_MINUTES) * 100)
+  const isOverLimit       = cumulativeMinutes > MAX_WINDOW_MINUTES
+  const remainingMinutes  = MAX_WINDOW_MINUTES - cumulativeMinutes
+
+  function updateFollowup(index: number, patch: Partial<Followup>) {
+    const updated = followups.map((f, i) => i === index ? { ...f, ...patch } : f)
+    onChange(updated)
+    setSaved(false)
+  }
+
+  function addFollowup() {
+    if (followups.length >= MAX_FOLLOWUPS) return
+    onChange([...followups, { delay_hours: 1, delay_minutes: 0, objective: "", enabled: true }])
+    setSaved(false)
+  }
+
+  function removeFollowup(index: number) {
+    onChange(followups.filter((_, i) => i !== index))
+    setSaved(false)
+  }
+
+  function wouldExceedLimit(index: number, newHours: number, newMinutes: number): boolean {
+    let total = 0
+    for (let i = 0; i < followups.length; i++) {
+      if (!followups[i].enabled) continue
+      if (i === index) {
+        total += newHours * 60 + newMinutes
+      } else {
+        total += followupToMinutes(followups[i])
+      }
+    }
+    return total > MAX_WINDOW_MINUTES
+  }
+
+  async function handleSave() {
+    if (isOverLimit) return
+    setSaving(true)
+    const { error } = await supabase
+      .from("agents")
+      .update({ followups })
+      .eq("id", agentId)
+    setSaving(false)
+    if (error) {
+      alert("Error guardando seguimientos: " + error.message)
+    } else {
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    }
+  }
+
+  // Cumulative timeline positions for enabled followups
+  const timelineItems: { label: string; cumMin: number; index: number }[] = []
+  let cumMin = 0
+  for (let i = 0; i < followups.length; i++) {
+    if (!followups[i].enabled) continue
+    cumMin += followupToMinutes(followups[i])
+    timelineItems.push({ label: `S${i + 1}`, cumMin, index: i })
+  }
+
+  return (
+    <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 20 }}>
+
+      {/* Header */}
+      <div>
+        <div style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>Seguimientos automáticos</div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>
+          Configura hasta {MAX_FOLLOWUPS} mensajes de seguimiento que el agente enviará automáticamente si el
+          contacto no responde. Los tiempos son relativos al último mensaje enviado y deben respetar la ventana
+          de 24 horas de Meta.
+        </div>
+      </div>
+
+      {/* Timeline bar */}
+      <div style={{
+        background: "#f9fafb", border: `1px solid ${isOverLimit ? "#fca5a5" : "#e5e7eb"}`,
+        borderRadius: 10, padding: 16,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+            Ventana de 24 horas de Meta
+          </span>
+          <span style={{
+            fontSize: 12, fontWeight: 600,
+            color: isOverLimit ? "#dc2626" : remainingMinutes < 120 ? "#d97706" : "#059669",
+          }}>
+            {isOverLimit
+              ? `Excede por ${formatTime(cumulativeMinutes - MAX_WINDOW_MINUTES)}`
+              : `${formatTime(remainingMinutes)} disponibles`}
+          </span>
+        </div>
+
+        {/* Bar */}
+        <div style={{
+          height: 28, background: "#e5e7eb", borderRadius: 6, position: "relative", overflow: "hidden",
+        }}>
+          <div style={{
+            height: "100%",
+            width: `${Math.min(100, usedPercent)}%`,
+            background: isOverLimit
+              ? "linear-gradient(90deg, #fca5a5, #ef4444)"
+              : usedPercent > 80
+              ? "linear-gradient(90deg, #2563eb, #d97706)"
+              : "linear-gradient(90deg, #2563eb, #3b82f6)",
+            borderRadius: 6,
+            transition: "width 300ms ease",
+          }} />
+
+          {/* Markers */}
+          {timelineItems.map((item) => {
+            const pct = Math.min(100, (item.cumMin / MAX_WINDOW_MINUTES) * 100)
+            return (
+              <div key={item.index} style={{
+                position: "absolute", top: 0, bottom: 0, left: `${pct}%`,
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                transform: "translateX(-50%)",
+              }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, color: "white",
+                  textShadow: "0 1px 2px rgba(0,0,0,0.3)",
+                }}>
+                  {item.label}
+                </span>
+              </div>
+            )
+          })}
+
+          {/* 24h end marker */}
+          <div style={{
+            position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)",
+            fontSize: 10, color: "#9ca3af", fontWeight: 600,
+          }}>
+            24h
+          </div>
+        </div>
+
+        {/* Legend */}
+        {timelineItems.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+            {timelineItems.map((item) => (
+              <span key={item.index} style={{ fontSize: 11, color: "#6b7280" }}>
+                {item.label}: a las {formatTime(item.cumMin)} del mensaje original
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Followup cards */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {followups.map((f, i) => {
+          const minutes = followupToMinutes(f)
+          const hasTime = minutes > 0
+          const hasObjective = f.objective.trim().length > 0
+          const invalid = f.enabled && (!hasTime || !hasObjective)
+
+          return (
+            <div key={i} style={{
+              border: `1px solid ${invalid ? "#fca5a5" : f.enabled ? "#e5e7eb" : "#f3f4f6"}`,
+              borderRadius: 10, padding: 16,
+              background: f.enabled ? "white" : "#fafafa",
+              opacity: f.enabled ? 1 : 0.65,
+              transition: "all 200ms",
+            }}>
+              {/* Card header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 8,
+                    background: f.enabled ? "#eff6ff" : "#f3f4f6",
+                    color: f.enabled ? "#2563eb" : "#9ca3af",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 12, fontWeight: 700,
+                  }}>
+                    {i + 1}
+                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+                    Seguimiento {i + 1}
+                  </span>
+                  {f.enabled && hasTime && (
+                    <span style={{
+                      fontSize: 11, padding: "2px 8px", borderRadius: 20,
+                      background: "#eff6ff", color: "#2563eb", fontWeight: 500,
+                    }}>
+                      +{formatTime(minutes)} desde el último mensaje
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Toggle small value={f.enabled} onChange={(v) => updateFollowup(i, { enabled: v })} />
+                  <button type="button" onClick={() => removeFollowup(i)}
+                    title="Eliminar seguimiento"
+                    style={{ ...iconBtn, color: "#ef4444", padding: "4px 6px" }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Time inputs */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ ...labelStyle, marginBottom: 6 }}>Tiempo desde el último mensaje</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <input
+                      type="number" min={0} max={23}
+                      value={f.delay_hours}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(23, parseInt(e.target.value) || 0))
+                        if (wouldExceedLimit(i, val, f.delay_minutes)) return
+                        updateFollowup(i, { delay_hours: val })
+                      }}
+                      style={{ ...inputStyle, width: 64, textAlign: "center" as const, padding: "8px 6px" }}
+                    />
+                    <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 500 }}>h</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <input
+                      type="number" min={0} max={59} step={5}
+                      value={f.delay_minutes}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(59, parseInt(e.target.value) || 0))
+                        if (wouldExceedLimit(i, f.delay_hours, val)) return
+                        updateFollowup(i, { delay_minutes: val })
+                      }}
+                      style={{ ...inputStyle, width: 64, textAlign: "center" as const, padding: "8px 6px" }}
+                    />
+                    <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 500 }}>min</span>
+                  </div>
+                  {!hasTime && f.enabled && (
+                    <span style={{ fontSize: 11, color: "#dc2626", marginLeft: 4 }}>
+                      Define un tiempo mayor a 0
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Objective */}
+              <div>
+                <label style={{ ...labelStyle, marginBottom: 6 }}>Objetivo del seguimiento</label>
+                <textarea
+                  placeholder={`Ej: Recordar al contacto sobre la consulta pendiente y preguntar si tiene alguna duda adicional.`}
+                  value={f.objective}
+                  onChange={(e) => updateFollowup(i, { objective: e.target.value })}
+                  rows={2}
+                  style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+                />
+                {!hasObjective && f.enabled && (
+                  <span style={{ fontSize: 11, color: "#dc2626", marginTop: 4, display: "block" }}>
+                    Describe el objetivo para que el agente sepa qué mensaje generar.
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Add button */}
+      {followups.length < MAX_FOLLOWUPS && (
+        <button type="button" onClick={addFollowup}
+          style={{
+            padding: "12px 16px", borderRadius: 10, fontSize: 13, fontWeight: 500,
+            border: "2px dashed #d1d5db", background: "transparent", color: "#6b7280",
+            cursor: "pointer", transition: "all 150ms",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb"; e.currentTarget.style.color = "#2563eb" }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#d1d5db"; e.currentTarget.style.color = "#6b7280" }}
+        >
+          + Agregar seguimiento ({followups.length}/{MAX_FOLLOWUPS})
+        </button>
+      )}
+
+      {/* Error banner */}
+      {isOverLimit && (
+        <div style={{
+          padding: "12px 16px", borderRadius: 10, fontSize: 13,
+          background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ fontSize: 18 }}>&#9888;</span>
+          <span>
+            La suma de los tiempos ({formatTime(cumulativeMinutes)}) excede la ventana de 24 horas de Meta.
+            Reduce el tiempo de uno o más seguimientos.
+          </span>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {followups.length === 0 && (
+        <div style={{
+          textAlign: "center", padding: "40px 16px", color: "#9ca3af",
+          border: "2px dashed #e5e7eb", borderRadius: 10,
+        }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>&#128337;</div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>Sin seguimientos configurados</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            Agrega el primero para que el agente haga seguimiento automático a los contactos que no respondan.
+          </div>
+        </div>
+      )}
+
+      {/* Save button */}
+      {followups.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, paddingTop: 4, borderTop: "1px solid #f3f4f6" }}>
+          {saved && (
+            <span style={{ fontSize: 12, color: "#059669", fontWeight: 500, alignSelf: "center" }}>
+              &#10003; Guardado correctamente
+            </span>
+          )}
+          <button type="button" onClick={handleSave}
+            disabled={saving || isOverLimit}
+            style={{
+              ...primaryBtn,
+              opacity: saving || isOverLimit ? 0.6 : 1,
+              cursor: saving || isOverLimit ? "not-allowed" : "pointer",
+            }}>
+            {saving ? "Guardando\u2026" : "Guardar seguimientos"}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── IntegrationsTab: catálogo de plataformas ─────────────────────────────────
 
 function IntegrationsTab({ agentId }: { agentId: string }) {
@@ -503,7 +867,7 @@ function AgentPanel({
   saving: boolean
 }) {
   const [form, setForm]           = useState<Agent>(agent)
-  const [activeTab, setActiveTab] = useState<"entrenamiento" | "integraciones" | "conocimiento">("entrenamiento")
+  const [activeTab, setActiveTab] = useState<"entrenamiento" | "integraciones" | "conocimiento" | "seguimientos">("entrenamiento")
   const textareaRef               = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { setForm(agent); setActiveTab("entrenamiento") }, [agent])
@@ -542,25 +906,43 @@ function AgentPanel({
 
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", paddingLeft: 20, flexShrink: 0 }}>
-        {(["entrenamiento", "integraciones", "conocimiento"] as const).map((tab) => (
-          <button key={tab} type="button" onClick={() => setActiveTab(tab)}
-            style={{
-              padding: "10px 16px", fontSize: 13,
-              fontWeight: activeTab === tab ? 600 : 400,
-              color: activeTab === tab ? "#2563eb" : "#6b7280",
-              borderTop: "none", borderLeft: "none", borderRight: "none",
-              borderBottom: `2px solid ${activeTab === tab ? "#2563eb" : "transparent"}`,
-              background: "transparent",
-              cursor: "pointer", transition: "color 150ms",
-            }}
-          >
-            {tab === "entrenamiento" ? "Entrenamiento" : tab === "integraciones" ? "Integraciones" : "Conocimiento"}
-          </button>
-        ))}
+        {(["entrenamiento", "integraciones", "conocimiento", "seguimientos"] as const).map((tab) => {
+          const labels: Record<string, string> = {
+            entrenamiento: "Entrenamiento",
+            integraciones: "Integraciones",
+            conocimiento: "Conocimiento",
+            seguimientos: "Seguimientos",
+          }
+          return (
+            <button key={tab} type="button" onClick={() => setActiveTab(tab)}
+              style={{
+                padding: "10px 16px", fontSize: 13,
+                fontWeight: activeTab === tab ? 600 : 400,
+                color: activeTab === tab ? "#2563eb" : "#6b7280",
+                borderTop: "none", borderLeft: "none", borderRight: "none",
+                borderBottom: `2px solid ${activeTab === tab ? "#2563eb" : "transparent"}`,
+                background: "transparent",
+                cursor: "pointer", transition: "color 150ms",
+              }}
+            >
+              {labels[tab]}
+            </button>
+          )
+        })}
       </div>
 
       {/* Content */}
-      {activeTab === "conocimiento" ? (
+      {activeTab === "seguimientos" ? (
+        <div style={{ flex: 1, overflow: "auto" }}>
+          {!agent.id ? (
+            <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af" }}>
+              <p style={{ fontSize: 13 }}>Guarda el agente primero para configurar seguimientos.</p>
+            </div>
+          ) : (
+            <FollowupsTab agentId={agent.id} followups={form.followups ?? []} onChange={(f) => upd({ followups: f })} />
+          )}
+        </div>
+      ) : activeTab === "conocimiento" ? (
         <div style={{ flex: 1, overflow: "auto" }}>
           {!agent.id ? (
             <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af" }}>
@@ -1013,6 +1395,7 @@ export default function AgentesPage() {
       name: form.name.trim(), description: form.description.trim(),
       instructions: form.instructions.trim(), active: form.active,
       llm_provider: form.llm_provider, llm_model: form.llm_model,
+      followups: form.followups ?? [],
     }
     const { error } = form.id
       ? await supabase.from("agents").update(payload).eq("id", form.id)
