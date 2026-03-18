@@ -228,6 +228,7 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
         last_activity:   timestamp,
         last_inbound_at: timestamp,
         unread_count:    (conversation.unread_count ?? 0) + 1,
+        followup_sent:   [],   // el contacto respondió → resetear ciclo de seguimientos
       })
       .eq("id", conversation.id)
   }

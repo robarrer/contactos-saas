@@ -239,9 +239,10 @@ async function invokeAgent(conversationId, messageText, waId, organizationId) {
       status:          waRes.ok ? "sent" : "failed",
     })
 
+    const botSentAt = new Date().toISOString()
     await supabase
       .from("conversations")
-      .update({ last_message: result.text, last_activity: new Date().toISOString() })
+      .update({ last_message: result.text, last_activity: botSentAt, last_bot_at: botSentAt })
       .eq("id", conversationId)
 
     console.log(`[worker] Bot respondió a ${waId}: "${result.text.slice(0, 60)}…"`)

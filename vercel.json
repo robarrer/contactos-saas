@@ -8,6 +8,15 @@
     },
     "app/API/webhook/whatsapp/route.js": {
       "maxDuration": 30
+    },
+    "app/API/followups/cron/route.js": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path":     "/API/followups/cron",
+      "schedule": "*/15 * * * *"
+    }
+  ]
 }

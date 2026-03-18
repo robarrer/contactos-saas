@@ -230,7 +230,7 @@ export async function POST(req) {
   let body
   try { body = await req.json() } catch { return Response.json({ error: "Body inválido" }, { status: 400 }) }
 
-  const { conversation_id, message_text, organization_id } = body
+  const { conversation_id, message_text, organization_id, followup_objective, followup_index } = body
 
   if (!conversation_id || !message_text) {
     return Response.json({ error: "Faltan conversation_id o message_text" }, { status: 400 })
@@ -238,8 +238,8 @@ export async function POST(req) {
 
   const supabase = getServiceClient()
 
-  // 1. Detectar escalación por palabras clave
-  if (detectEscalation(message_text)) {
+  // 1. Detectar escalación por palabras clave (solo si es mensaje real del contacto, no un seguimiento)
+  if (!followup_objective && detectEscalation(message_text)) {
     return Response.json({ action: "escalate", reason: "keyword" })
   }
 
@@ -454,9 +454,20 @@ export async function POST(req) {
       ].join("\n")
     : ""
 
+  const followupSection = followup_objective
+    ? [
+        "",
+        "── MENSAJE DE SEGUIMIENTO ──",
+        `Este es un seguimiento automático (nº ${(followup_index ?? 0) + 1}). El contacto no ha respondido desde tu último mensaje.`,
+        `Objetivo de este seguimiento: ${followup_objective}`,
+        "Genera un mensaje breve, natural y amigable que cumpla ese objetivo. NO menciones que es un seguimiento automático.",
+      ].join("\n")
+    : ""
+
   const systemPrompt = [
     `Eres "${agent.name}". ${agent.instructions?.trim() || "Eres un asistente de atención al cliente. Responde de forma amable y concisa en español."}`,
     kbSection,
+    followupSection,
     "",
     "REGLAS IMPORTANTES:",
     "- Responde SIEMPRE en español.",
