@@ -97,143 +97,126 @@ function buildAnthropicTools(tools) {
   })
 }
 
-// ─── Llamada a OpenAI (con soporte de function calling) ──────────────────────
+// ─── Fetch con timeout y retry para 429 ──────────────────────────────────────
+
+const LLM_TIMEOUT_MS = 30000
+const MAX_RETRIES    = 1
+
+async function fetchLLM(url, options) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetch(url, { ...options, signal: AbortSignal.timeout(LLM_TIMEOUT_MS) })
+
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const retryAfter = parseInt(res.headers.get("retry-after") || "5", 10)
+      console.warn(`[agent-reply] LLM 429, reintentando en ${retryAfter}s...`)
+      await new Promise((r) => setTimeout(r, retryAfter * 1000))
+      continue
+    }
+
+    return res
+  }
+}
+
+// ─── Llamada a OpenAI (con loop de tool calls) ──────────────────────────────
+
+const MAX_TOOL_ROUNDS = 5
 
 async function callOpenAI(model, systemPrompt, messages, apiKey, tools = []) {
   const key = apiKey || process.env.OPENAI_API_KEY
   if (!key) throw new Error("Falta OPENAI_API_KEY")
 
-  const body = {
-    model,
-    messages: [{ role: "system", content: systemPrompt }, ...messages],
-    max_tokens: 1024,
-    temperature: 0.7,
-  }
+  const allMessages = [{ role: "system", content: systemPrompt }, ...messages]
+  const llmTools = tools.length ? buildOpenAITools(tools) : undefined
 
-  if (tools.length) {
-    body.tools = buildOpenAITools(tools)
-    body.tool_choice = "auto"
-  }
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const body = { model, messages: allMessages, max_tokens: 1024, temperature: 0.7 }
+    if (llmTools) { body.tools = llmTools; body.tool_choice = "auto" }
 
-  const res1 = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  })
+    const res = await fetchLLM("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
 
-  const data1 = await res1.json()
-  if (!res1.ok) throw new Error(data1?.error?.message || "Error OpenAI")
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.error?.message || `Error OpenAI (HTTP ${res.status})`)
 
-  const msg1 = data1.choices[0].message
+    const msg = data.choices[0].message
 
-  // LLM quiere llamar a una tool
-  if (msg1.tool_calls?.length) {
-    const toolCall = msg1.tool_calls[0]
-    const toolDef  = tools.find((t) => t.name === toolCall.function.name)
+    if (!msg.tool_calls?.length || round === MAX_TOOL_ROUNDS) {
+      return msg.content?.trim() || ""
+    }
 
-    if (toolDef) {
+    // Procesar todas las tool calls del turno
+    allMessages.push(msg)
+    for (const toolCall of msg.tool_calls) {
+      const toolDef = tools.find((t) => t.name === toolCall.function.name)
       let toolParams = {}
       try { toolParams = JSON.parse(toolCall.function.arguments) } catch {}
 
-      console.log(`[agent-reply] OpenAI tool_call: ${toolCall.function.name}`, JSON.stringify(toolParams))
-      const toolResult = await executeTool(toolDef, toolParams)
+      console.log(`[agent-reply] OpenAI tool_call[${round}]: ${toolCall.function.name}`, JSON.stringify(toolParams))
 
-      // Segunda llamada con el resultado de la tool
-      const res2 = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...messages,
-            msg1,
-            { role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(toolResult) },
-          ],
-          max_tokens: 1024,
-          temperature: 0.7,
-        }),
-      })
+      const toolResult = toolDef
+        ? await executeTool(toolDef, toolParams)
+        : { error: `Función desconocida: ${toolCall.function.name}` }
 
-      const data2 = await res2.json()
-      if (!res2.ok) throw new Error(data2?.error?.message || "Error OpenAI (respuesta tool)")
-      return data2.choices[0].message.content.trim()
+      allMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(toolResult) })
     }
   }
 
-  return msg1.content?.trim() || ""
+  return ""
 }
 
-// ─── Llamada a Anthropic (con soporte de tool use) ───────────────────────────
+// ─── Llamada a Anthropic (con loop de tool calls) ───────────────────────────
 
 async function callAnthropic(model, systemPrompt, messages, apiKey, tools = []) {
   const key = apiKey || process.env.ANTHROPIC_API_KEY
   if (!key) throw new Error("Falta ANTHROPIC_API_KEY")
 
-  const body = {
-    model,
-    system: systemPrompt,
-    messages,
-    max_tokens: 1024,
-  }
+  const allMessages = [...messages]
+  const llmTools = tools.length ? buildAnthropicTools(tools) : undefined
 
-  if (tools.length) {
-    body.tools = buildAnthropicTools(tools)
-  }
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    const body = { model, system: systemPrompt, messages: allMessages, max_tokens: 1024 }
+    if (llmTools) body.tools = llmTools
 
-  const res1 = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  })
+    const res = await fetchLLM("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    })
 
-  const data1 = await res1.json()
-  if (!res1.ok) throw new Error(data1?.error?.message || "Error Anthropic")
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.error?.message || `Error Anthropic (HTTP ${res.status})`)
 
-  // LLM quiere llamar a una tool
-  if (data1.stop_reason === "tool_use") {
-    const toolUse = data1.content.find((c) => c.type === "tool_use")
-    if (toolUse) {
-      const toolDef = tools.find((t) => t.name === toolUse.name)
-      if (toolDef) {
-        console.log(`[agent-reply] Anthropic tool_use: ${toolUse.name}`, JSON.stringify(toolUse.input))
-        const toolResult = await executeTool(toolDef, toolUse.input || {})
-
-        // Segunda llamada con el resultado de la tool
-        const res2 = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            system: systemPrompt,
-            messages: [
-              ...messages,
-              { role: "assistant", content: data1.content },
-              {
-                role: "user",
-                content: [{ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify(toolResult) }],
-              },
-            ],
-            max_tokens: 1024,
-          }),
-        })
-
-        const data2 = await res2.json()
-        if (!res2.ok) throw new Error(data2?.error?.message || "Error Anthropic (respuesta tool)")
-        return data2.content.find((c) => c.type === "text")?.text?.trim() || ""
-      }
+    if (data.stop_reason !== "tool_use" || round === MAX_TOOL_ROUNDS) {
+      return data.content.find((c) => c.type === "text")?.text?.trim() || ""
     }
+
+    // Procesar todas las tool uses del turno
+    allMessages.push({ role: "assistant", content: data.content })
+    const toolResults = []
+
+    for (const block of data.content.filter((c) => c.type === "tool_use")) {
+      const toolDef = tools.find((t) => t.name === block.name)
+
+      console.log(`[agent-reply] Anthropic tool_use[${round}]: ${block.name}`, JSON.stringify(block.input))
+
+      const toolResult = toolDef
+        ? await executeTool(toolDef, block.input || {})
+        : { error: `Función desconocida: ${block.name}` }
+
+      toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(toolResult) })
+    }
+
+    allMessages.push({ role: "user", content: toolResults })
   }
 
-  return data1.content.find((c) => c.type === "text")?.text?.trim() || ""
+  return ""
 }
 
 // ─── POST /API/agent-reply ────────────────────────────────────────────────────
@@ -432,24 +415,33 @@ export async function POST(req) {
     .order("created_at", { ascending: false })
     .limit(20)
 
-  const messages = (history ?? []).reverse().map((m) => {
+  const rawMessages = (history ?? []).reverse().map((m) => {
     if (m.sender_type === "contact") {
       return { role: "user", content: m.content ?? "" }
     }
-    // Si el sender_name coincide con el agente actual, es un mensaje propio
     const isCurrentAgent = m.sender_name === agent.name
     if (isCurrentAgent) {
       return { role: "assistant", content: m.content ?? "" }
     }
-    // Mensaje de otro agente o bot anterior: marcarlo para que no contamine
     return {
       role: "assistant",
       content: `[Mensaje de otro asistente — ignora su contexto temático]: ${m.content ?? ""}`,
     }
   })
 
-  if (!messages.length || messages[messages.length - 1].content !== message_text) {
-    messages.push({ role: "user", content: message_text })
+  if (!rawMessages.length || rawMessages[rawMessages.length - 1].content !== message_text) {
+    rawMessages.push({ role: "user", content: message_text })
+  }
+
+  // Limitar historial a ~3000 tokens para no exceder context window
+  const MAX_HISTORY_CHARS = 12000
+  let charCount = 0
+  const messages = []
+  for (let i = rawMessages.length - 1; i >= 0; i--) {
+    const len = rawMessages[i].content.length
+    if (charCount + len > MAX_HISTORY_CHARS && messages.length > 0) break
+    messages.unshift(rawMessages[i])
+    charCount += len
   }
 
   // 7. System prompt
