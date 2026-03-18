@@ -16,6 +16,11 @@ function getServiceClient() {
  * 3. Si sigue siendo el último mensaje, invoca al agente
  */
 export async function POST(req) {
+  const internalSecret = req.headers.get("x-internal-secret")
+  if (!process.env.INTERNAL_API_SECRET || internalSecret !== process.env.INTERNAL_API_SECRET) {
+    return Response.json({ error: "Forbidden" }, { status: 403 })
+  }
+
   let body
   try { body = await req.json() } catch { return Response.json({ error: "bad body" }, { status: 400 }) }
 
@@ -96,9 +101,23 @@ export async function POST(req) {
     }
   }
 
-  // 4. Soy el último — concatenar mensajes del window
+  // 4. Verificación atómica: delete solo si last_message_at sigue siendo el mío
+  //    Si otro worker actualizó el timestamp, el delete no matchea y retorna count=0
+  const { data: deleted } = await supabase
+    .from("message_debounce")
+    .delete()
+    .eq("conversation_id", conversation_id)
+    .eq("last_message_at", message_timestamp)
+    .select("conversation_id")
+
+  if (!deleted?.length) {
+    console.log(`[worker] Lock perdido — otro worker tomó el control conv=${conversation_id}`)
+    return Response.json({ action: "cancelled", reason: "lock_lost" })
+  }
+
+  // 5. Concatenar mensajes del window
   const windowStart = new Date(thisAt - debounceSeconds * 1000 - 1000).toISOString()
-  const recentQuery = supabase
+  const { data: recentMsgs } = await supabase
     .from("messages")
     .select("content, created_at")
     .eq("conversation_id", conversation_id)
@@ -106,19 +125,11 @@ export async function POST(req) {
     .gte("created_at", windowStart)
     .order("created_at", { ascending: true })
 
-  const { data: recentMsgs } = await recentQuery
-
   const combinedText = recentMsgs && recentMsgs.length > 1
     ? recentMsgs.map((m) => m.content).filter(Boolean).join("\n")
     : content
 
   console.log(`[worker] INVOKING agente con ${recentMsgs?.length ?? 1} msg(s) — conv=${conversation_id}`)
-
-  // 5. Limpiar fila de debounce
-  await supabase
-    .from("message_debounce")
-    .delete()
-    .eq("conversation_id", conversation_id)
 
   // 6. Invocar agente IA
   await invokeAgent(conversation_id, combinedText, wa_id, organization_id)
@@ -144,7 +155,7 @@ async function invokeAgent(conversationId, messageText, waId, organizationId) {
 
   const res = await fetch(`${baseUrl}/API/agent-reply`, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-internal-secret": process.env.INTERNAL_API_SECRET || "" },
     body:    JSON.stringify({
       conversation_id: conversationId,
       message_text:    messageText,

@@ -239,6 +239,11 @@ async function callAnthropic(model, systemPrompt, messages, apiKey, tools = []) 
 // ─── POST /API/agent-reply ────────────────────────────────────────────────────
 
 export async function POST(req) {
+  const internalSecret = req.headers.get("x-internal-secret")
+  if (!process.env.INTERNAL_API_SECRET || internalSecret !== process.env.INTERNAL_API_SECRET) {
+    return Response.json({ error: "Forbidden" }, { status: 403 })
+  }
+
   let body
   try { body = await req.json() } catch { return Response.json({ error: "Body inválido" }, { status: 400 }) }
 

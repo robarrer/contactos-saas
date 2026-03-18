@@ -14,3 +14,13 @@ create table if not exists agent_csv_knowledge (
 
 create index if not exists agent_csv_knowledge_agent_id_idx
   on agent_csv_knowledge(agent_id);
+
+alter table agent_csv_knowledge enable row level security;
+
+create policy "agent_csv_knowledge_org" on agent_csv_knowledge
+  using (
+    agent_id in (select id from agents where organization_id = get_org_id())
+  )
+  with check (
+    agent_id in (select id from agents where organization_id = get_org_id())
+  );
