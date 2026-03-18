@@ -65,17 +65,25 @@ export async function POST(req) {
   // Fallback: usar env vars (compatibilidad con setup de un solo tenant)
   const appSecret = organization?.whatsapp_app_secret || process.env.WHATSAPP_APP_SECRET
 
-  // Verificar firma HMAC
-  if (appSecret) {
-    const expected = "sha256=" + crypto
-      .createHmac("sha256", appSecret)
-      .update(rawBody)
-      .digest("hex")
+  // Verificar firma HMAC — obligatorio
+  if (!appSecret) {
+    console.error("[webhook] CRÍTICO: No hay whatsapp_app_secret configurado. Rechazando request.")
+    return new Response("Service Unavailable", { status: 503 })
+  }
 
-    if (signature !== expected) {
-      console.warn("[webhook] Firma inválida")
+  const expected = "sha256=" + crypto
+    .createHmac("sha256", appSecret)
+    .update(rawBody)
+    .digest("hex")
+
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+      console.warn("[webhook] Firma HMAC inválida")
       return new Response("Unauthorized", { status: 401 })
     }
+  } catch {
+    console.warn("[webhook] Firma HMAC inválida (formato incorrecto)")
+    return new Response("Unauthorized", { status: 401 })
   }
 
   const orgId = organization?.id ?? null
