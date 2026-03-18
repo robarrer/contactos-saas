@@ -7,5 +7,5 @@ export function createClient() {
   )
 }
 
-// Instancia singleton para uso en componentes client
+// Solo para componentes "use client". NUNCA importar en Server Components o API routes.
 export const supabase = createClient()
