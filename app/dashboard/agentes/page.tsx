@@ -1050,7 +1050,8 @@ function AgentPanel({
 type CsvKb = {
   id: string
   name: string
-  search_column: string
+  mode: "exact" | "catalog"
+  search_column: string | null
   headers: string[]
   row_count: number
   created_at: string
@@ -1102,6 +1103,7 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
   const [csvHeaders, setCsvHeaders]   = useState<string[]>([])
   const [csvRows, setCsvRows]         = useState<Record<string, string>[]>([])
   const [csvName, setCsvName]         = useState("")
+  const [csvMode, setCsvMode]         = useState<"exact" | "catalog">("exact")
   const [csvSeparator, setCsvSeparator]   = useState("")
   const [csvFileName, setCsvFileName]     = useState("")
   const [searchColumn, setSearchColumn] = useState("")
@@ -1139,6 +1141,7 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
     setCsvHeaders([])
     setCsvRows([])
     setCsvName("")
+    setCsvMode("exact")
     setCsvSeparator("")
     setCsvFileName("")
     setSearchColumn("")
@@ -1147,7 +1150,8 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
   }
 
   async function handleSaveKb() {
-    if (!searchColumn || !csvRows.length || !csvName.trim()) return
+    if (!csvRows.length || !csvName.trim()) return
+    if (csvMode === "exact" && !searchColumn) return
     setSavingKb(true)
     const res = await fetch("/API/agent-csv-knowledge", {
       method: "POST",
@@ -1155,7 +1159,8 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
       body: JSON.stringify({
         agent_id:      agentId,
         name:          csvName.trim(),
-        search_column: searchColumn,
+        mode:          csvMode,
+        search_column: csvMode === "exact" ? searchColumn : (searchColumn || null),
         headers:       csvHeaders,
         rows:          csvRows,
         row_count:     csvRows.length,
@@ -1174,7 +1179,12 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
 
   async function handleDeleteKb(id: string) {
     if (!confirm("¿Eliminar esta base de conocimiento? El agente dejará de tener acceso a sus datos.")) return
-    await fetch(`/API/agent-csv-knowledge?id=${id}`, { method: "DELETE" })
+    const res = await fetch(`/API/agent-csv-knowledge?id=${id}`, { method: "DELETE" })
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}))
+      alert("Error al eliminar: " + (json.error ?? res.statusText))
+      return
+    }
     setKbs((prev) => prev.filter((k) => k.id !== id))
   }
 
@@ -1186,7 +1196,7 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
         <div>
           <div style={{ fontWeight: 600, fontSize: 14, color: "#111827" }}>Base de conocimiento CSV</div>
           <div style={{ fontSize: 12, color: "#6b7280", marginTop: 3, lineHeight: 1.5 }}>
-            Sube archivos CSV estructurados. El agente buscará registros usando coincidencia exacta en la columna seleccionada.
+            Sube archivos CSV para entrenar al agente. Usa el modo <strong>Catálogo de productos</strong> para recomendaciones, precios y stock; o <strong>Búsqueda por código</strong> para consultas exactas.
           </div>
         </div>
         {!showUpload && (
@@ -1254,8 +1264,39 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
                   value={csvName}
                   onChange={(e) => setCsvName(e.target.value)}
                   style={inputStyle}
-                  placeholder="Ej: Catálogo de habitaciones"
+                  placeholder="Ej: Catálogo de productos"
                 />
+              </div>
+
+              {/* Selector de modo */}
+              <div>
+                <label style={labelStyle}>Modo de uso <span style={{ color: "#ef4444" }}>*</span></label>
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  {(["catalog", "exact"] as const).map((m) => {
+                    const isSelected = csvMode === m
+                    const label = m === "catalog" ? "Catálogo de productos" : "Búsqueda por código"
+                    const desc  = m === "catalog"
+                      ? "Recomendaciones, precios, stock y características. El agente busca en todas las columnas."
+                      : "Búsqueda exacta por un código o identificador en una columna específica."
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setCsvMode(m)}
+                        style={{
+                          flex: 1, textAlign: "left", padding: "10px 12px",
+                          borderRadius: 8, cursor: "pointer",
+                          border: `2px solid ${isSelected ? "#2563eb" : "#e5e7eb"}`,
+                          background: isSelected ? "#eff6ff" : "white",
+                          transition: "border-color 150ms, background 150ms",
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, fontSize: 12, color: isSelected ? "#1d4ed8" : "#374151" }}>{label}</div>
+                        <div style={{ fontSize: 11, color: isSelected ? "#3b82f6" : "#6b7280", marginTop: 3, lineHeight: 1.4 }}>{desc}</div>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
 
               <div>
@@ -1275,17 +1316,33 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
                 </div>
               </div>
 
-              <div>
-                <label style={labelStyle}>Columna de búsqueda <span style={{ color: "#ef4444" }}>*</span></label>
-                <select
-                  value={searchColumn}
-                  onChange={(e) => setSearchColumn(e.target.value)}
-                  style={inputStyle}
-                >
-                  {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
-                </select>
-                <p style={hintStyle}>El agente buscará registros usando esta columna como clave exacta (sin distinguir mayúsculas).</p>
-              </div>
+              {/* Columna de búsqueda: requerida en exact, opcional en catalog */}
+              {csvMode === "exact" ? (
+                <div>
+                  <label style={labelStyle}>Columna de búsqueda <span style={{ color: "#ef4444" }}>*</span></label>
+                  <select
+                    value={searchColumn}
+                    onChange={(e) => setSearchColumn(e.target.value)}
+                    style={inputStyle}
+                  >
+                    {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                  <p style={hintStyle}>El agente buscará registros usando esta columna como clave exacta (sin distinguir mayúsculas).</p>
+                </div>
+              ) : (
+                <div>
+                  <label style={labelStyle}>Columna de código (opcional)</label>
+                  <select
+                    value={searchColumn}
+                    onChange={(e) => setSearchColumn(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">— Sin columna de código —</option>
+                    {csvHeaders.map((h) => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                  <p style={hintStyle}>En modo catálogo el agente busca en todas las columnas. Puedes indicar una columna de código como referencia adicional.</p>
+                </div>
+              )}
 
               <div style={{ padding: "10px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 12, color: "#166534" }}>
                 ✓ {csvRows.length} registros listos para cargar · separador detectado: <strong>{csvSeparator === ";" ? "punto y coma (;)" : "coma (,)"}</strong>
@@ -1301,7 +1358,7 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
               <button
                 type="button"
                 onClick={handleSaveKb}
-                disabled={savingKb || !searchColumn || !csvName.trim()}
+                disabled={savingKb || !csvName.trim() || (csvMode === "exact" && !searchColumn)}
                 style={{ ...primaryBtn, opacity: savingKb ? 0.7 : 1 }}
               >
                 {savingKb ? "Guardando…" : "Guardar base de conocimiento"}
@@ -1322,19 +1379,31 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {kbs.map((kb) => (
+          {kbs.map((kb) => {
+            const isCatalog = kb.mode === "catalog"
+            return (
             <div key={kb.id} style={{
               border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 14px",
               background: "white", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
             }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, color: "#111827", display: "flex", alignItems: "center", gap: 6 }}>
-                  <span>📄</span>
+                  <span>{isCatalog ? "🛒" : "📄"}</span>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{kb.name}</span>
+                  <span style={{
+                    padding: "1px 7px", borderRadius: 5, fontSize: 10, fontWeight: 600, flexShrink: 0,
+                    background: isCatalog ? "#fef3c7" : "#e0e7ff",
+                    color: isCatalog ? "#92400e" : "#3730a3",
+                    border: `1px solid ${isCatalog ? "#fde68a" : "#c7d2fe"}`,
+                  }}>
+                    {isCatalog ? "Catálogo" : "Exacto"}
+                  </span>
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 3 }}>
-                  Búsqueda por: <strong style={{ color: "#374151" }}>{kb.search_column}</strong>
-                  {" · "}
+                  {isCatalog
+                    ? <>Búsqueda en todas las columnas · </>
+                    : <>{kb.search_column ? <>Búsqueda por: <strong style={{ color: "#374151" }}>{kb.search_column}</strong> · </> : null}</>
+                  }
                   {kb.row_count} registro{kb.row_count !== 1 ? "s" : ""}
                   {" · "}
                   {kb.headers.length} columna{kb.headers.length !== 1 ? "s" : ""}
@@ -1343,9 +1412,9 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
                   {kb.headers.map((h) => (
                     <span key={h} style={{
                       padding: "2px 7px", borderRadius: 5, fontSize: 11,
-                      background: h === kb.search_column ? "#dbeafe" : "#f3f4f6",
-                      color: h === kb.search_column ? "#1d4ed8" : "#6b7280",
-                      fontWeight: h === kb.search_column ? 600 : 400,
+                      background: (!isCatalog && h === kb.search_column) ? "#dbeafe" : "#f3f4f6",
+                      color: (!isCatalog && h === kb.search_column) ? "#1d4ed8" : "#6b7280",
+                      fontWeight: (!isCatalog && h === kb.search_column) ? 600 : 400,
                     }}>
                       {h}
                     </span>
@@ -1365,7 +1434,8 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
                 </svg>
               </button>
             </div>
-          ))}
+          )
+          })}
         </div>
       )}
     </div>

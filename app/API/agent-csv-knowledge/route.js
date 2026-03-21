@@ -33,7 +33,7 @@ export async function GET(request) {
   const supabase = getServiceClient()
   const { data, error } = await supabase
     .from("agent_csv_knowledge")
-    .select("id, name, search_column, headers, row_count, created_at")
+    .select("id, name, mode, search_column, headers, row_count, created_at")
     .eq("agent_id", agent_id)
     .order("created_at", { ascending: false })
 
@@ -50,10 +50,15 @@ export async function POST(request) {
   if (!user) return Response.json({ error: "No autenticado" }, { status: 401 })
 
   const body = await request.json()
-  const { agent_id, name, search_column, headers, rows, row_count } = body
+  const { agent_id, name, mode, search_column, headers, rows, row_count } = body
 
-  if (!agent_id || !name || !search_column) {
+  // En modo 'catalog' search_column es opcional; en 'exact' es requerido
+  const effectiveMode = mode === "catalog" ? "catalog" : "exact"
+  if (!agent_id || !name) {
     return Response.json({ error: "Faltan campos requeridos" }, { status: 400 })
+  }
+  if (effectiveMode === "exact" && !search_column) {
+    return Response.json({ error: "search_column es requerido en modo exact" }, { status: 400 })
   }
 
   // Verificar acceso al agente usando la sesión del usuario (respeta RLS de agents)
@@ -71,7 +76,7 @@ export async function POST(request) {
   const supabase = getServiceClient()
   const { data, error } = await supabase
     .from("agent_csv_knowledge")
-    .insert({ agent_id, name, search_column, headers, rows, row_count })
+    .insert({ agent_id, name, mode: effectiveMode, search_column: search_column || null, headers, rows, row_count })
     .select()
     .single()
 
@@ -92,19 +97,30 @@ export async function DELETE(request) {
 
   if (!id) return Response.json({ error: "ID requerido" }, { status: 400 })
 
-  // Verificar acceso al registro usando la sesión del usuario (respeta RLS de agent_csv_knowledge)
-  const { data: kb } = await serverClient
+  // Leer el KB con service role (RLS de agent_csv_knowledge está rota)
+  const supabase = getServiceClient()
+  const { data: kb } = await supabase
     .from("agent_csv_knowledge")
     .select("id, agent_id")
     .eq("id", id)
     .maybeSingle()
 
   if (!kb) {
-    return Response.json({ error: "Registro no encontrado o sin permisos" }, { status: 403 })
+    return Response.json({ error: "Registro no encontrado" }, { status: 404 })
+  }
+
+  // Verificar que el agente pertenece al usuario usando la sesión (respeta RLS de agents)
+  const { data: agent } = await serverClient
+    .from("agents")
+    .select("id")
+    .eq("id", kb.agent_id)
+    .maybeSingle()
+
+  if (!agent) {
+    return Response.json({ error: "Sin permisos para eliminar este registro" }, { status: 403 })
   }
 
   // Eliminar usando service role para bypassear la RLS rota
-  const supabase = getServiceClient()
   const { error } = await supabase
     .from("agent_csv_knowledge")
     .delete()

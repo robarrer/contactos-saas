@@ -33,14 +33,46 @@ async function executeTool(fn, params) {
 
   // Búsqueda exacta en base de conocimiento CSV
   if (platform === "csv_kb") {
+    const rows = fn._kb_rows ?? []
+    const mode = fn._kb_mode ?? "exact"
+
+    if (mode === "catalog") {
+      // Búsqueda flexible multi-columna con scoring por relevancia.
+      // Usa OR lógico (cualquier término coincide) ordenado por cantidad de matches,
+      // para tolerar frases conversacionales como "ando buscando hilo dental".
+      const consulta = String(params.consulta ?? "").trim().toLowerCase()
+      if (!consulta) {
+        return { resultado: "Necesito un término de búsqueda para consultar el catálogo." }
+      }
+      const terms = consulta.split(/\s+/).filter((t) => t.length >= 2)
+      if (!terms.length) {
+        return { resultado: "El término de búsqueda es demasiado corto." }
+      }
+      const scored = rows
+        .map((r) => {
+          const haystack = Object.values(r).join(" ").toLowerCase()
+          const score = terms.filter((term) => haystack.includes(term)).length
+          return { row: r, score }
+        })
+        .filter(({ score }) => score > 0)
+        .sort((a, b) => b.score - a.score)
+
+      const topMatches = scored.slice(0, 8).map(({ row }) => row)
+      if (!topMatches.length) {
+        return { resultado: `No se encontraron productos relacionados con "${params.consulta}" en el catálogo "${fn._kb_name}".` }
+      }
+      console.log(`[agent-reply] csv_kb catalog "${fn._kb_name}" consulta="${consulta}" terms=[${terms.join(",")}] → ${scored.length} coincidencia(s), retornando top ${topMatches.length}`)
+      return { resultado: topMatches, total_encontrados: scored.length, mostrando: topMatches.length }
+    }
+
+    // Modo 'exact': búsqueda exacta por search_column (comportamiento original)
     const searchVal = String(params.valor ?? "").trim().toLowerCase()
-    const rows      = fn._kb_rows ?? []
     const col       = fn._search_column
     const matches   = rows.filter((r) => String(r[col] ?? "").trim().toLowerCase() === searchVal)
     if (!matches.length) {
       return { resultado: `No se encontraron registros con el valor "${params.valor}" en la columna "${col}".` }
     }
-    console.log(`[agent-reply] csv_kb "${fn._kb_name}" col="${col}" val="${searchVal}" → ${matches.length} resultado(s)`)
+    console.log(`[agent-reply] csv_kb exact "${fn._kb_name}" col="${col}" val="${searchVal}" → ${matches.length} resultado(s)`)
     return { resultado: matches, total: matches.length }
   }
 
@@ -357,7 +389,7 @@ export async function POST(req) {
   // 5b. Cargar bases de conocimiento CSV del agente
   const { data: csvKbs, error: csvError } = await supabase
     .from("agent_csv_knowledge")
-    .select("id, name, search_column, rows")
+    .select("id, name, mode, search_column, headers, rows")
     .eq("agent_id", agent.id)
 
   if (csvError) {
@@ -366,6 +398,7 @@ export async function POST(req) {
 
   const csvKbTools = []
   for (const kb of csvKbs ?? []) {
+    const kbMode = kb.mode ?? "exact"
     const safeName = kb.name
       .toLowerCase()
       .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -374,27 +407,57 @@ export async function POST(req) {
       .replace(/^_|_$/g, "")
       .slice(0, 30) || `kb_${kb.id.slice(0, 8)}`
 
-    const toolDef = {
-      id:          `csv_${safeName}`,
-      name:        `buscar_${safeName}`,
-      description: `OBLIGATORIO: Usa esta función para buscar en la base de datos "${kb.name}" cuando el usuario mencione cualquier código, número, referencia o identificador. Búsqueda exacta por la columna "${kb.search_column}". SIEMPRE llama a esta función antes de responder sobre un código o registro específico.`,
-      parameters:  [
-        {
-          name:        "valor",
-          type:        "string",
-          description: `Valor exacto a buscar en la columna "${kb.search_column}" (por ejemplo: un código numérico, un ID o una referencia)`,
-          required:    true,
-        },
-      ],
-      _platform:      "csv_kb",
-      _config:        {},
-      _kb_rows:       kb.rows ?? [],
-      _search_column: kb.search_column,
-      _kb_name:       kb.name,
+    let toolDef
+
+    if (kbMode === "catalog") {
+      // Catálogo de productos: búsqueda flexible multi-columna
+      const columnas = (kb.headers ?? []).join(", ")
+      const totalFilas = Array.isArray(kb.rows) ? kb.rows.length : "?"
+      toolDef = {
+        id:          `csv_${safeName}`,
+        name:        `buscar_en_${safeName}`,
+        description: `Busca productos en el catálogo "${kb.name}" (${totalFilas} productos). Columnas disponibles: ${columnas}. Úsala para encontrar productos por nombre, código, categoría, precio, stock o cualquier característica. Extrae las palabras clave de lo que busca el usuario y pásalas como consulta (ej: "hilo dental", "cepillo suave", "kit blanqueamiento"). Llámala SIEMPRE antes de responder sobre disponibilidad, precios, características o recomendaciones de productos.`,
+        parameters: [
+          {
+            name:        "consulta",
+            type:        "string",
+            description: `Términos de búsqueda (ej: "auriculares bluetooth", "rojo 500", "ABC123"). Se busca en todas las columnas del catálogo.`,
+            required:    true,
+          },
+        ],
+        _platform:   "csv_kb",
+        _config:     {},
+        _kb_rows:    kb.rows ?? [],
+        _kb_mode:    "catalog",
+        _kb_name:    kb.name,
+        _kb_headers: kb.headers ?? [],
+      }
+    } else {
+      // Modo exact: comportamiento original
+      toolDef = {
+        id:          `csv_${safeName}`,
+        name:        `buscar_${safeName}`,
+        description: `OBLIGATORIO: Usa esta función para buscar en la base de datos "${kb.name}" cuando el usuario mencione cualquier código, número, referencia o identificador. Búsqueda exacta por la columna "${kb.search_column}". SIEMPRE llama a esta función antes de responder sobre un código o registro específico.`,
+        parameters:  [
+          {
+            name:        "valor",
+            type:        "string",
+            description: `Valor exacto a buscar en la columna "${kb.search_column}" (por ejemplo: un código numérico, un ID o una referencia)`,
+            required:    true,
+          },
+        ],
+        _platform:      "csv_kb",
+        _config:        {},
+        _kb_rows:       kb.rows ?? [],
+        _kb_mode:       "exact",
+        _search_column: kb.search_column,
+        _kb_name:       kb.name,
+      }
     }
+
     tools.push(toolDef)
     csvKbTools.push(toolDef)
-    console.log(`[agent-reply] CSV KB cargado: "${kb.name}" columna="${kb.search_column}" filas=${Array.isArray(kb.rows) ? kb.rows.length : "?"}`)
+    console.log(`[agent-reply] CSV KB cargado: "${kb.name}" mode=${kbMode} filas=${Array.isArray(kb.rows) ? kb.rows.length : "?"}`)
   }
 
   if (!csvKbs || csvKbs.length === 0) {
@@ -445,14 +508,37 @@ export async function POST(req) {
   }
 
   // 7. System prompt
-  const kbSection = csvKbTools.length > 0
+  const exactKbTools    = csvKbTools.filter((kb) => kb._kb_mode !== "catalog")
+  const catalogKbTools  = csvKbTools.filter((kb) => kb._kb_mode === "catalog")
+
+  const kbExactSection = exactKbTools.length > 0
     ? [
         "",
         "BASES DE CONOCIMIENTO DISPONIBLES:",
-        ...csvKbTools.map((kb) => `- "${kb._kb_name}": búsqueda exacta por columna "${kb._search_column}". Usa la función ${kb.name}() SIEMPRE que el usuario mencione un código, número o referencia que pueda estar en esta base de datos.`),
+        ...exactKbTools.map((kb) => `- "${kb._kb_name}": búsqueda exacta por columna "${kb._search_column}". Usa la función ${kb.name}() SIEMPRE que el usuario mencione un código, número o referencia que pueda estar en esta base de datos.`),
         "REGLA CRÍTICA: Antes de responder que no tienes información sobre un código o registro, DEBES llamar a la función de búsqueda correspondiente. Nunca digas 'no tengo información' sin haber buscado primero.",
       ].join("\n")
     : ""
+
+  const kbCatalogSection = catalogKbTools.length > 0
+    ? [
+        "",
+        "CATÁLOGOS DE PRODUCTOS DISPONIBLES:",
+        ...catalogKbTools.map((kb) => {
+          const cols = (kb._kb_headers ?? []).join(", ")
+          const total = Array.isArray(kb._kb_rows) ? kb._kb_rows.length : "?"
+          return `- "${kb._kb_name}" (${total} productos, columnas: ${cols}): usa ${kb.name}(consulta) para buscar por nombre, código, precio, stock, categoría o cualquier característica.`
+        }),
+        "REGLAS PARA EL CATÁLOGO:",
+        "- SIEMPRE llama a la función de búsqueda antes de responder sobre disponibilidad, precios, stock o características.",
+        "- Puedes hacer varias llamadas con términos distintos si la primera no da resultados útiles.",
+        "- Cuando hagas recomendaciones, basa tu respuesta ÚNICAMENTE en los productos del catálogo.",
+        "- Si el usuario pide comparar productos, busca cada uno y luego compara sus campos.",
+        "- Nunca inventes productos, precios ni características que no estén en los resultados.",
+      ].join("\n")
+    : ""
+
+  const kbSection = [kbExactSection, kbCatalogSection].filter(Boolean).join("\n")
 
   const followupSection = followup_objective
     ? [
