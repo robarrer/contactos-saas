@@ -1110,12 +1110,9 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
 
   async function loadKbs() {
     setLoadingKbs(true)
-    const { data } = await supabase
-      .from("agent_csv_knowledge")
-      .select("id, name, search_column, headers, row_count, created_at")
-      .eq("agent_id", agentId)
-      .order("created_at", { ascending: false })
-    setKbs(data ?? [])
+    const res = await fetch(`/API/agent-csv-knowledge?agent_id=${agentId}`)
+    const json = await res.json()
+    setKbs(json.data ?? [])
     setLoadingKbs(false)
   }
 
@@ -1152,16 +1149,21 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
   async function handleSaveKb() {
     if (!searchColumn || !csvRows.length || !csvName.trim()) return
     setSavingKb(true)
-    const { error } = await supabase.from("agent_csv_knowledge").insert({
-      agent_id:      agentId,
-      name:          csvName.trim(),
-      search_column: searchColumn,
-      headers:       csvHeaders,
-      rows:          csvRows,
-      row_count:     csvRows.length,
+    const res = await fetch("/API/agent-csv-knowledge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id:      agentId,
+        name:          csvName.trim(),
+        search_column: searchColumn,
+        headers:       csvHeaders,
+        rows:          csvRows,
+        row_count:     csvRows.length,
+      }),
     })
-    if (error) {
-      alert("Error guardando base de conocimiento: " + error.message)
+    const json = await res.json()
+    if (!res.ok) {
+      alert("Error guardando base de conocimiento: " + json.error)
       setSavingKb(false)
       return
     }
@@ -1172,7 +1174,7 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
 
   async function handleDeleteKb(id: string) {
     if (!confirm("¿Eliminar esta base de conocimiento? El agente dejará de tener acceso a sus datos.")) return
-    await supabase.from("agent_csv_knowledge").delete().eq("id", id)
+    await fetch(`/API/agent-csv-knowledge?id=${id}`, { method: "DELETE" })
     setKbs((prev) => prev.filter((k) => k.id !== id))
   }
 

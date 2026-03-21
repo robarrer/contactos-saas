@@ -1,0 +1,34 @@
+---
+description: Arquitectura general del proyecto contactos-saas. Contexto esencial para cualquier sesión de trabajo.
+alwaysApply: true
+---
+
+# contactos-saas — Contexto de arquitectura
+
+SaaS multi-tenant de mensajería WhatsApp con agentes IA. Stack: Next.js 16 + Supabase + Vercel.
+
+## Flujo principal
+```
+Meta Webhook → /API/webhook/whatsapp
+  → after() → /API/agent-worker (debounce 0-8s, polling activo en DB)
+    → /API/agent-reply (LLM OpenAI/Anthropic + tool calls)
+      → WhatsApp Graph API (envío) + Supabase (persistencia)
+        → Supabase Realtime → frontend (bandeja de soporte)
+```
+
+## Multi-tenancy
+- Cada `organization` tiene sus propias credenciales: `whatsapp_token`, `phone_number_id`, `openai_api_key`, `anthropic_api_key`
+- Las env vars del proyecto son **fallback** para dev local y orgs sin credenciales propias
+- El tenant se identifica en el webhook por `phone_number_id` del payload de Meta
+- Filtrado por `organization_id` en código; RLS solo en `agent_integrations` y `agent_csv_knowledge`
+
+## Tablas clave
+`organizations` · `profiles` · `contacts` · `conversations` · `messages` · `agents` · `pipeline_stages` · `agent_integrations` · `agent_csv_knowledge` · `message_debounce` · `settings` · `webhook_events`
+
+## Seguridad interna
+- webhook → worker → agent-reply: header `x-internal-secret` = `INTERNAL_API_SECRET`
+- Cron routes: header `Authorization: Bearer CRON_SECRET`
+- Meta webhook: HMAC-SHA256 con `whatsapp_app_secret` de la org
+
+## Documentación completa
+Ver `ARCHITECTURE.md` en la raíz del proyecto.

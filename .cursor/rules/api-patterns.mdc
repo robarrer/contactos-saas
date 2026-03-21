@@ -1,0 +1,63 @@
+---
+description: Patrones y convenciones para las API routes del proyecto. Aplica al editar o crear rutas en app/API/.
+globs: app/API/**/*.js
+alwaysApply: false
+---
+
+# Patrones de API routes
+
+## Autenticación por tipo de ruta
+
+```js
+// Rutas internas (worker, agent-reply): x-internal-secret
+const secret = req.headers.get("x-internal-secret")
+if (!process.env.INTERNAL_API_SECRET || secret !== process.env.INTERNAL_API_SECRET) {
+  return Response.json({ error: "Forbidden" }, { status: 403 })
+}
+
+// Cron routes: Bearer token
+const authHeader = request.headers.get("authorization")
+if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+}
+
+// Rutas de usuario: sesión Supabase SSR (ver app/lib/supabase-server.ts)
+```
+
+## Cliente Supabase en API routes
+
+Siempre usar service role en rutas de servidor (no el cliente del browser):
+```js
+import { createClient } from "@supabase/supabase-js"
+function getServiceClient() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+}
+```
+
+## Resolución de URL base para llamadas internas
+
+```js
+function getBaseUrl() {
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  if (process.env.VERCEL_URL)                   return `https://${process.env.VERCEL_URL}`
+  return process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
+}
+```
+
+## Credenciales de organización
+
+Siempre cargar credenciales de la org primero; usar env vars como fallback:
+```js
+let waToken = process.env.WHATSAPP_TOKEN
+if (organizationId) {
+  const { data: org } = await supabase.from("organizations")
+    .select("whatsapp_token").eq("id", organizationId).maybeSingle()
+  if (org?.whatsapp_token) waToken = org.whatsapp_token
+}
+```
+
+## Reglas generales
+- Todas las queries deben filtrar por `organization_id` cuando esté disponible
+- No usar `throw` en funciones de respuesta HTTP; devolver `Response.json({ error }, { status })`
+- Los logs de error usan el prefijo `[nombre-ruta]` para facilitar el filtrado en Vercel logs
+- `maxDuration` configurado en `vercel.json`; no agregar nuevas rutas largas sin actualizarlo

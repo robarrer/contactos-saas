@@ -1,0 +1,44 @@
+---
+description: Limitaciones de escalabilidad conocidas. Leer antes de modificar agent-worker, followups/cron, o Realtime.
+alwaysApply: true
+---
+
+# Limitaciones de escalabilidad conocidas
+
+## ⚠️ agent-worker: polling activo (no tocar sin plan de migración)
+
+`/API/agent-worker` hace polling a DB cada 500ms durante hasta 8 segundos, manteniendo la función Serverless abierta. Esto es intencional para la etapa actual (~10 clientes) pero **no escala más allá de ~50 clientes**.
+
+- NO agregar más lógica dentro del loop de polling
+- NO aumentar el `maxDuration` más allá de 60s
+- El lock es optimista: `DELETE WHERE conversation_id = X AND last_message_at = Y`
+- Plan de migración a escala: reemplazar con Inngest o Upstash QStash
+
+## ⚠️ followups/cron: sin paginación
+
+`/API/followups/cron` carga todas las conversaciones activas de todas las orgs en una query. Con 200+ clientes activos puede exceder el timeout de 60s.
+
+- NO agregar lógica pesada dentro del `for (const conv of conversations)` loop
+- Si se agrega una nueva integración, asegurarse de que su llamada tenga `AbortSignal.timeout()`
+- Plan de migración: procesar en batches de 50 orgs con cursor de paginación
+
+## ⚠️ Supabase Realtime: sin filtro de org en el canal
+
+`useSupabaseInbox.ts` recibe eventos de todas las organizaciones y los descarta en JS. No es un riesgo de seguridad (los datos no se muestran) pero sí un desperdicio de ancho de banda con muchas orgs activas.
+
+**Fix pendiente:**
+```ts
+// Cambiar esto:
+.on("postgres_changes", { event: "INSERT", table: "messages" }, handler)
+
+// Por esto:
+.on("postgres_changes", { event: "INSERT", table: "messages", filter: `organization_id=eq.${orgId}` }, handler)
+```
+
+## ⚠️ RLS incompleto
+
+Solo `agent_integrations` y `agent_csv_knowledge` tienen Row Level Security. Las demás tablas dependen de filtros en código. Al agregar nuevas queries, **siempre incluir `.eq("organization_id", orgId)`**.
+
+## Sin retry automático
+
+Si el LLM, WhatsApp API o Supabase fallan, el mensaje se pierde silenciosamente. Los errores solo quedan en Vercel logs. Con el volumen actual esto es aceptable; a escala se requiere Inngest con dead letter queue.
