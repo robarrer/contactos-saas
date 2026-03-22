@@ -5,7 +5,7 @@ import { supabase } from "@/app/lib/supabase"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Tab = "respuestas" | "bot" | "usuarios"
+type Tab = "respuestas" | "bot" | "usuarios" | "organizacion"
 
 type SettingKey = "message_debounce_seconds"
 type Settings = { message_debounce_seconds: number }
@@ -52,9 +52,10 @@ export default function AjustesPage() {
         {/* Tabs */}
         <div style={{ display: "flex", gap: 2, background: "#f3f4f6", borderRadius: 9, padding: 3 }}>
           {([
-            { id: "respuestas", label: "Respuestas predefinidas" },
-            { id: "bot",        label: "Comportamiento del bot"  },
-            { id: "usuarios",   label: "Usuarios"                },
+            { id: "respuestas",    label: "Respuestas predefinidas" },
+            { id: "bot",          label: "Comportamiento del bot"  },
+            { id: "usuarios",     label: "Usuarios"                },
+            { id: "organizacion", label: "Organización"            },
           ] as { id: Tab; label: string }[]).map((t) => (
             <button
               key={t.id}
@@ -80,9 +81,10 @@ export default function AjustesPage() {
 
       {/* Content */}
       <div style={{ flex: 1, overflow: "auto" }}>
-        {tab === "respuestas" && <RespuestasTab />}
-        {tab === "bot"        && <BotTab />}
-        {tab === "usuarios"   && <UsuariosTab />}
+        {tab === "respuestas"    && <RespuestasTab />}
+        {tab === "bot"           && <BotTab />}
+        {tab === "usuarios"      && <UsuariosTab />}
+        {tab === "organizacion"  && <OrganizacionTab />}
       </div>
     </div>
   )
@@ -644,6 +646,235 @@ function UsuariosTab() {
         )
       })()}
     </>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TAB: Organización
+// ══════════════════════════════════════════════════════════════════════════════
+
+type OrgData = {
+  whatsapp_token:               string
+  whatsapp_phone_number_id:     string
+  whatsapp_business_account_id: string
+  whatsapp_verify_token:        string
+  whatsapp_app_secret:          string
+  has_token:        boolean
+  has_verify_token: boolean
+  has_app_secret:   boolean
+}
+
+const EMPTY_ORG_FORM = {
+  whatsapp_token:               "",
+  whatsapp_phone_number_id:     "",
+  whatsapp_business_account_id: "",
+  whatsapp_verify_token:        "",
+  whatsapp_app_secret:          "",
+}
+
+function OrganizacionTab() {
+  const [current, setCurrent]     = useState<OrgData | null>(null)
+  const [loading, setLoading]     = useState(true)
+  const [form, setForm]           = useState(EMPTY_ORG_FORM)
+  const [saving, setSaving]       = useState(false)
+  const [saved, setSaved]         = useState(false)
+  const [error, setError]         = useState<string | null>(null)
+  const [showFields, setShowFields] = useState<Record<string, boolean>>({})
+  const [copied, setCopied]       = useState(false)
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const webhookUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/API/webhook/whatsapp`
+    : "/API/webhook/whatsapp"
+
+  useEffect(() => {
+    fetch("/API/admin/organization")
+      .then((r) => r.json())
+      .then((d) => { if (d.org) setCurrent(d.org) })
+      .finally(() => setLoading(false))
+  }, [])
+
+  function toggleShow(field: string) {
+    setShowFields((p) => ({ ...p, [field]: !p[field] }))
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+    const hasAny = Object.values(form).some((v) => v.trim() !== "")
+    if (!hasAny) { setError("Completa al menos un campo para actualizar."); return }
+    setSaving(true)
+    const res  = await fetch("/API/admin/organization", {
+      method:  "PUT",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(form),
+    })
+    const data = await res.json()
+    setSaving(false)
+    if (!res.ok) { setError(data.error ?? "Error desconocido"); return }
+    setForm(EMPTY_ORG_FORM)
+    setSaved(true)
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSaved(false), 3000)
+    // Refrescar valores enmascarados
+    fetch("/API/admin/organization").then((r) => r.json()).then((d) => { if (d.org) setCurrent(d.org) })
+  }
+
+  async function copyWebhook() {
+    try { await navigator.clipboard.writeText(webhookUrl); setCopied(true); setTimeout(() => setCopied(false), 2000) } catch { /* noop */ }
+  }
+
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: "#9ca3af", fontSize: 14 }}>
+      Cargando configuración…
+    </div>
+  )
+
+  const fields: { key: keyof typeof EMPTY_ORG_FORM; label: string; placeholder: string; secret: boolean; help: string }[] = [
+    {
+      key:    "whatsapp_token",
+      label:  "Token de acceso (WhatsApp)",
+      placeholder: current?.has_token ? "Dejar vacío para no cambiar" : "EAAxxxxx…",
+      secret: true,
+      help:   "Meta Business Suite → Usuarios del sistema → Generar token (permisos whatsapp_business_messaging)",
+    },
+    {
+      key:    "whatsapp_phone_number_id",
+      label:  "Phone Number ID",
+      placeholder: current?.whatsapp_phone_number_id || "1234567890",
+      secret: false,
+      help:   "Meta for Developers → tu App → WhatsApp → Getting Started → Phone Number ID",
+    },
+    {
+      key:    "whatsapp_business_account_id",
+      label:  "WABA ID (Business Account ID)",
+      placeholder: current?.whatsapp_business_account_id || "1234567890",
+      secret: false,
+      help:   "Meta for Developers → tu App → WhatsApp → Getting Started → WhatsApp Business Account ID",
+    },
+    {
+      key:    "whatsapp_verify_token",
+      label:  "Verify Token (webhook)",
+      placeholder: current?.has_verify_token ? "Dejar vacío para no cambiar" : "mi_token_secreto",
+      secret: true,
+      help:   "String aleatorio que tú defines; se usa para verificar el webhook en Meta",
+    },
+    {
+      key:    "whatsapp_app_secret",
+      label:  "App Secret",
+      placeholder: current?.has_app_secret ? "Dejar vacío para no cambiar" : "abc123…",
+      secret: true,
+      help:   "Meta for Developers → tu App → Configuración → Básica → Secreto de la app",
+    },
+  ]
+
+  return (
+    <div style={{ maxWidth: 680, padding: "28px 24px" }}>
+
+      {/* URL del Webhook */}
+      <div style={{ background: "white", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+          <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>URL del Webhook</h2>
+          <span style={{ fontSize: 12, color: "#6b7280", background: "#f3f4f6", padding: "2px 8px", borderRadius: 10 }}>Solo lectura</span>
+        </div>
+        <div style={{ padding: "16px 20px" }}>
+          <p style={{ margin: "0 0 10px", fontSize: 13, color: "#6b7280", lineHeight: 1.5 }}>
+            Configura esta URL en <strong>Meta for Developers → tu App → WhatsApp → Configuración → Webhook</strong>.
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <code style={{ flex: 1, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "9px 12px", fontSize: 13, color: "#374151", wordBreak: "break-all" }}>
+              {webhookUrl}
+            </code>
+            <button
+              type="button"
+              onClick={copyWebhook}
+              style={{ flexShrink: 0, padding: "9px 14px", borderRadius: 8, border: "1px solid #e5e7eb", background: copied ? "#f0fdf4" : "white", cursor: "pointer", fontSize: 12, fontWeight: 600, color: copied ? "#16a34a" : "#374151", display: "flex", alignItems: "center", gap: 5, transition: "all 150ms" }}
+            >
+              {copied ? (
+                <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Copiado</>
+              ) : (
+                <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copiar</>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Formulario credenciales */}
+      <div style={{ background: "white", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden" }}>
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Credenciales de WhatsApp</h2>
+        </div>
+
+        <form onSubmit={handleSave}>
+          <div style={{ padding: "20px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+            {fields.map((f) => (
+              <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{f.label}</span>
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={f.secret && !showFields[f.key] ? "password" : "text"}
+                    value={form[f.key]}
+                    onChange={(e) => setForm((p) => ({ ...p, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    autoComplete="off"
+                    style={{ ...inputStyle, paddingRight: f.secret ? 40 : 10 }}
+                  />
+                  {f.secret && (
+                    <button
+                      type="button"
+                      onClick={() => toggleShow(f.key)}
+                      title={showFields[f.key] ? "Ocultar" : "Mostrar"}
+                      style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#9ca3af", padding: 2, display: "flex", alignItems: "center" }}
+                    >
+                      {showFields[f.key] ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <span style={{ fontSize: 11, color: "#9ca3af", lineHeight: 1.4 }}>{f.help}</span>
+              </label>
+            ))}
+
+            {error && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "9px 12px", fontSize: 13, color: "#dc2626" }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                {error}
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 4, borderTop: "1px solid #f3f4f6" }}>
+              <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", flex: 1 }}>
+                Solo se actualizan los campos que completes. Los campos vacíos mantienen su valor actual.
+              </p>
+              <button
+                type="submit"
+                disabled={saving}
+                style={{ flexShrink: 0, padding: "8px 20px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "none", background: saving ? "#9ca3af" : "#111827", color: "white", cursor: saving ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6 }}
+              >
+                {saving ? (
+                  "Guardando…"
+                ) : saved ? (
+                  <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Guardado</>
+                ) : (
+                  "Guardar cambios"
+                )}
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
   )
 }
 
