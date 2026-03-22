@@ -1057,42 +1057,81 @@ type CsvKb = {
   created_at: string
 }
 
+// Máximo de caracteres por campo al guardar en modo catálogo.
+// Evita que descripciones largas saturen el JSONB y la memoria del agente.
+const CATALOG_FIELD_MAX_CHARS = 300
+
 function parseCSV(text: string): { headers: string[]; rows: Record<string, string>[]; separator: string } {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0)
-  if (lines.length < 2) return { headers: [], rows: [], separator: "," }
+  if (!text.trim()) return { headers: [], rows: [], separator: "," }
 
-  // Auto-detectar separador: punto y coma tiene prioridad si aparece más que la coma
-  const firstLine = lines[0]
-  const semicolons = (firstLine.match(/;/g) ?? []).length
-  const commas     = (firstLine.match(/,/g) ?? []).length
-  const sep = semicolons >= commas ? ";" : ","
+  // Auto-detectar separador desde la primera línea real (antes del primer \n)
+  const firstNewline = text.indexOf("\n")
+  const firstLine    = firstNewline >= 0 ? text.slice(0, firstNewline) : text
+  const semicolons   = (firstLine.match(/;/g) ?? []).length
+  const commas       = (firstLine.match(/,/g) ?? []).length
+  const sep          = semicolons >= commas ? ";" : ","
 
-  function splitLine(line: string): string[] {
-    const result: string[] = []
-    let current = ""
-    let inQuotes = false
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      if (ch === '"') {
-        inQuotes = !inQuotes
-      } else if (ch === sep && !inQuotes) {
-        result.push(current.trim())
-        current = ""
+  // Parsear carácter a carácter para manejar campos con saltos de línea entrecomillados
+  const records: string[][] = []
+  let currentRecord: string[] = []
+  let currentField = ""
+  let inQuotes     = false
+
+  for (let i = 0; i < text.length; i++) {
+    const ch   = text[i]
+    const next = text[i + 1]
+
+    if (inQuotes) {
+      if (ch === '"' && next === '"') {
+        // Comilla escapada ("") dentro de un campo entrecomillado
+        currentField += '"'
+        i++
+      } else if (ch === '"') {
+        inQuotes = false
       } else {
-        current += ch
+        // Saltos de línea dentro de comillas → parte del campo, normalizar a espacio
+        if (ch === "\r") continue
+        currentField += ch === "\n" ? " " : ch
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true
+      } else if (ch === sep) {
+        currentRecord.push(currentField.trim())
+        currentField = ""
+      } else if (ch === "\r") {
+        // ignorar \r en secuencias \r\n
+      } else if (ch === "\n") {
+        currentRecord.push(currentField.trim())
+        currentField = ""
+        // Solo guardar filas no vacías
+        if (currentRecord.length > 1 || currentRecord[0] !== "") {
+          records.push(currentRecord)
+        }
+        currentRecord = []
+      } else {
+        currentField += ch
       }
     }
-    result.push(current.trim())
-    return result
   }
 
-  const headers = splitLine(lines[0])
-  const rows = lines.slice(1).map((line) => {
-    const values = splitLine(line)
+  // Último campo/fila si el archivo no termina en \n
+  if (currentField || currentRecord.length > 0) {
+    currentRecord.push(currentField.trim())
+    if (currentRecord.length > 1 || currentRecord[0] !== "") {
+      records.push(currentRecord)
+    }
+  }
+
+  if (records.length < 2) return { headers: [], rows: [], separator: sep }
+
+  const headers = records[0]
+  const rows    = records.slice(1).map((values) => {
     const row: Record<string, string> = {}
     headers.forEach((h, i) => { row[h] = values[i] ?? "" })
     return row
   })
+
   return { headers, rows, separator: sep }
 }
 
@@ -1153,6 +1192,18 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
     if (!csvRows.length || !csvName.trim()) return
     if (csvMode === "exact" && !searchColumn) return
     setSavingKb(true)
+
+    // En modo catálogo, recortar campos de texto largo para no saturar el JSONB
+    const rowsToSave = csvMode === "catalog"
+      ? csvRows.map((r) => {
+          const trimmed: Record<string, string> = {}
+          for (const [k, v] of Object.entries(r)) {
+            trimmed[k] = v.length > CATALOG_FIELD_MAX_CHARS ? v.slice(0, CATALOG_FIELD_MAX_CHARS) + "…" : v
+          }
+          return trimmed
+        })
+      : csvRows
+
     const res = await fetch("/API/agent-csv-knowledge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1162,8 +1213,8 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
         mode:          csvMode,
         search_column: csvMode === "exact" ? searchColumn : (searchColumn || null),
         headers:       csvHeaders,
-        rows:          csvRows,
-        row_count:     csvRows.length,
+        rows:          rowsToSave,
+        row_count:     rowsToSave.length,
       }),
     })
     const json = await res.json()
