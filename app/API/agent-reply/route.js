@@ -31,9 +31,25 @@ async function executeTool(fn, params) {
   const platform = fn._platform
   const config   = fn._config ?? {}
 
-  // Búsqueda exacta en base de conocimiento CSV
   if (platform === "csv_kb") {
-    const rows = fn._kb_rows ?? []
+    // Lazy load: las filas se cargan desde Supabase SOLO cuando el LLM decide usar la herramienta.
+    // Esto evita cargar el JSONB pesado por adelantado en cada request.
+    let rows = fn._kb_rows
+    if (!rows) {
+      console.log(`[agent-reply] Cargando filas CSV bajo demanda: kb_id=${fn._kb_id}`)
+      const supabase = getServiceClient()
+      const { data, error } = await supabase
+        .from("agent_csv_knowledge")
+        .select("rows")
+        .eq("id", fn._kb_id)
+        .maybeSingle()
+      if (error) {
+        console.error(`[agent-reply] Error cargando filas CSV kb_id=${fn._kb_id}:`, error.message)
+        return { error: "No se pudieron cargar los datos del catálogo. Intenta de nuevo." }
+      }
+      rows = data?.rows ?? []
+      fn._kb_rows = rows // cachear en el objeto para si el LLM llama la misma tool otra vez en esta conv
+    }
     const mode = fn._kb_mode ?? "exact"
 
     if (mode === "catalog") {
@@ -386,10 +402,13 @@ export async function POST(req) {
     }
   }
 
-  // 5b. Cargar bases de conocimiento CSV del agente
+  // 5b. Cargar bases de conocimiento CSV del agente (con caché en memoria)
+  // 5b. Cargar METADATOS de las bases de conocimiento CSV (sin las filas).
+  // Las filas se cargan bajo demanda en executeTool cuando el LLM decide usar la herramienta.
+  // Esto elimina la transferencia de MB de JSONB en cada request.
   const { data: csvKbs, error: csvError } = await supabase
     .from("agent_csv_knowledge")
-    .select("id, name, mode, search_column, headers, rows")
+    .select("id, name, mode, search_column, headers")
     .eq("agent_id", agent.id)
 
   if (csvError) {
@@ -410,13 +429,11 @@ export async function POST(req) {
     let toolDef
 
     if (kbMode === "catalog") {
-      // Catálogo de productos: búsqueda flexible multi-columna
       const columnas = (kb.headers ?? []).join(", ")
-      const totalFilas = Array.isArray(kb.rows) ? kb.rows.length : "?"
       toolDef = {
         id:          `csv_${safeName}`,
         name:        `buscar_en_${safeName}`,
-        description: `Busca productos en el catálogo "${kb.name}" (${totalFilas} productos). Columnas disponibles: ${columnas}. Úsala para encontrar productos por nombre, código, categoría, precio, stock o cualquier característica. Extrae las palabras clave de lo que busca el usuario y pásalas como consulta (ej: "hilo dental", "cepillo suave", "kit blanqueamiento"). Llámala SIEMPRE antes de responder sobre disponibilidad, precios, características o recomendaciones de productos.`,
+        description: `Busca productos en el catálogo "${kb.name}". Columnas disponibles: ${columnas}. Úsala para encontrar productos por nombre, código, categoría, precio, stock o cualquier característica. Extrae las palabras clave de lo que busca el usuario y pásalas como consulta (ej: "hilo dental", "cepillo suave", "kit blanqueamiento"). Llámala SIEMPRE antes de responder sobre disponibilidad, precios, características o recomendaciones de productos.`,
         parameters: [
           {
             name:        "consulta",
@@ -427,13 +444,13 @@ export async function POST(req) {
         ],
         _platform:   "csv_kb",
         _config:     {},
-        _kb_rows:    kb.rows ?? [],
+        _kb_id:      kb.id,
+        _kb_rows:    null,  // se carga bajo demanda en executeTool
         _kb_mode:    "catalog",
         _kb_name:    kb.name,
         _kb_headers: kb.headers ?? [],
       }
     } else {
-      // Modo exact: comportamiento original
       toolDef = {
         id:          `csv_${safeName}`,
         name:        `buscar_${safeName}`,
@@ -448,7 +465,8 @@ export async function POST(req) {
         ],
         _platform:      "csv_kb",
         _config:        {},
-        _kb_rows:       kb.rows ?? [],
+        _kb_id:         kb.id,
+        _kb_rows:       null,  // se carga bajo demanda en executeTool
         _kb_mode:       "exact",
         _search_column: kb.search_column,
         _kb_name:       kb.name,
@@ -457,7 +475,7 @@ export async function POST(req) {
 
     tools.push(toolDef)
     csvKbTools.push(toolDef)
-    console.log(`[agent-reply] CSV KB cargado: "${kb.name}" mode=${kbMode} filas=${Array.isArray(kb.rows) ? kb.rows.length : "?"}`)
+    console.log(`[agent-reply] CSV KB registrado: "${kb.name}" mode=${kbMode} (filas se cargan bajo demanda)`)
   }
 
   if (!csvKbs || csvKbs.length === 0) {
@@ -526,8 +544,7 @@ export async function POST(req) {
         "CATÁLOGOS DE PRODUCTOS DISPONIBLES:",
         ...catalogKbTools.map((kb) => {
           const cols = (kb._kb_headers ?? []).join(", ")
-          const total = Array.isArray(kb._kb_rows) ? kb._kb_rows.length : "?"
-          return `- "${kb._kb_name}" (${total} productos, columnas: ${cols}): usa ${kb.name}(consulta) para buscar por nombre, código, precio, stock, categoría o cualquier característica.`
+          return `- "${kb._kb_name}" (columnas: ${cols}): usa ${kb.name}(consulta) para buscar por nombre, código, precio, stock, categoría o cualquier característica.`
         }),
         "REGLAS PARA EL CATÁLOGO:",
         "- SIEMPRE llama a la función de búsqueda antes de responder sobre disponibilidad, precios, stock o características.",

@@ -143,7 +143,7 @@ function getBaseUrl() {
   if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
   if (process.env.VERCEL_URL)                   return `https://${process.env.VERCEL_URL}`
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
-  return appUrl && !appUrl.includes("localhost") ? appUrl : "http://localhost:3000"
+  return appUrl || "http://localhost:3000"
 }
 
 async function invokeAgent(conversationId, messageText, waId, organizationId) {
@@ -153,15 +153,27 @@ async function invokeAgent(conversationId, messageText, waId, organizationId) {
 
   const supabase = getServiceClient()
 
-  const res = await fetch(`${baseUrl}/API/agent-reply`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", "x-internal-secret": process.env.INTERNAL_API_SECRET || "" },
-    body:    JSON.stringify({
-      conversation_id: conversationId,
-      message_text:    messageText,
-      organization_id: organizationId,
-    }),
-  })
+  let res
+  try {
+    res = await fetch(`${baseUrl}/API/agent-reply`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "x-internal-secret": process.env.INTERNAL_API_SECRET || "" },
+      body:    JSON.stringify({
+        conversation_id: conversationId,
+        message_text:    messageText,
+        organization_id: organizationId,
+      }),
+      signal: AbortSignal.timeout(45000),
+    })
+  } catch (err) {
+    const isTimeout = err.name === "TimeoutError" || err.name === "AbortError"
+    if (isTimeout) {
+      console.error(`[worker] ⏱ agent-reply timeout (>45s) — conv=${conversationId}. Mensaje perdido bajo carga alta.`)
+    } else {
+      console.error(`[worker] Error llamando agent-reply: ${String(err)}`)
+    }
+    return
+  }
 
   if (!res.ok) {
     console.error("[worker] agent-reply error:", res.status, await res.text().catch(() => ""))

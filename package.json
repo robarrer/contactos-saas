@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "simulate": "node scripts/simulate.mjs",
+    "simulate:all": "node scripts/simulate.mjs all",
+    "simulate:load": "node scripts/simulate.mjs concurrent --count=10",
+    "simulate:risks": "node scripts/simulate.mjs risks"
   },
   "dependencies": {
     "@supabase/ssr": "^0.9.0",

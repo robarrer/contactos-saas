@@ -26,8 +26,8 @@ const EMPTY_CR: Omit<CannedResponse, "id" | "created_at"> = { category: "", titl
 function debounceLabel(s: number) {
   if (s === 0) return "Sin pausa (respuesta inmediata)"
   if (s === 1) return "1 segundo"
-  if (s < 60) return `${s} segundos`
-  return "60 segundos"
+  if (s <= 8) return `${s} segundos`
+  return "8 segundos (máximo)"
 }
 
 function debounceColor(s: number) {
@@ -342,7 +342,7 @@ function BotTab() {
           <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
               <input
-                type="range" min={0} max={60} step={1} value={dv}
+                type="range" min={0} max={8} step={1} value={Math.min(dv, 8)}
                 onChange={(e) => setSettings((p) => ({ ...p, message_debounce_seconds: parseInt(e.target.value) }))}
                 onMouseUp={(e)  => saveSetting("message_debounce_seconds", parseInt((e.target as HTMLInputElement).value))}
                 onTouchEnd={(e) => saveSetting("message_debounce_seconds", parseInt((e.target as HTMLInputElement).value))}
@@ -354,21 +354,21 @@ function BotTab() {
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9ca3af", paddingRight: 66 }}>
-              <span>0s</span><span>15s</span><span>30s</span><span>45s</span><span>60s</span>
+              <span>0s</span><span>2s</span><span>4s</span><span>6s</span><span>8s</span>
             </div>
 
-            {dv > 20 && (
+            {dv > 5 && (
               <div style={{ display: "flex", gap: 8, background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400e" }}>
                 <span>⚠️</span>
-                <span>Un tiempo alto puede hacer que el bot parezca lento. Se recomienda entre 3 y 10 segundos.</span>
+                <span>Valores altos hacen que el bot parezca lento. El máximo técnico es 8s para no exceder el tiempo límite de procesamiento.</span>
               </div>
             )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 4 }}>
               {[
-                { label: "Inmediato", value: 0,  desc: "Responde cada mensaje por separado" },
-                { label: "Recomendado", value: 5, desc: "Agrupa mensajes enviados en 5s" },
-                { label: "Conservador", value: 15, desc: "Espera que el usuario termine" },
+                { label: "Inmediato",    value: 0, desc: "Responde cada mensaje por separado" },
+                { label: "Recomendado",  value: 5, desc: "Agrupa mensajes enviados en 5s"      },
+                { label: "Conservador",  value: 8, desc: "Máximo — espera que el usuario termine" },
               ].map((p) => (
                 <button key={p.value}
                   onClick={() => { setSettings((prev) => ({ ...prev, message_debounce_seconds: p.value })); saveSetting("message_debounce_seconds", p.value) }}

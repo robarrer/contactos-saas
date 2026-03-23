@@ -267,7 +267,7 @@ function getBaseUrl() {
   if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
   if (process.env.VERCEL_URL)                   return `https://${process.env.VERCEL_URL}`
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
-  return appUrl && !appUrl.includes("localhost") ? appUrl : "http://localhost:3000"
+  return appUrl || "http://localhost:3000"
 }
 
 // ─── Llamar al worker usando after() para garantizar ejecución post-respuesta ─
