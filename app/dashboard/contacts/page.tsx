@@ -188,9 +188,41 @@ export default function ContactsPage() {
     if (!form.first_name.trim() || !form.email.trim() || !form.phone.trim() || !form.company.trim() || !form.status.trim()) {
       alert("Completa todos los campos"); return
     }
+
+    // Normalizar teléfono al formato "+número"
+    const normalizedPhone = form.phone.trim().startsWith("+") ? form.phone.trim() : `+${form.phone.trim()}`
+
+    if (!editingContactId) {
+      // Verificar que no exista otro contacto con el mismo teléfono en la org
+      const { data: existing } = await supabase
+        .from("contacts")
+        .select("id, first_name, last_name")
+        .eq("phone", normalizedPhone)
+        .eq("organization_id", orgId)
+        .maybeSingle()
+      if (existing) {
+        alert(`Ya existe un contacto con ese teléfono: ${[existing.first_name, existing.last_name].filter(Boolean).join(" ")}`)
+        return
+      }
+    } else {
+      // Al editar, verificar que el nuevo teléfono no lo use otro contacto
+      const { data: existing } = await supabase
+        .from("contacts")
+        .select("id")
+        .eq("phone", normalizedPhone)
+        .eq("organization_id", orgId)
+        .neq("id", editingContactId)
+        .maybeSingle()
+      if (existing) {
+        alert("Ese número de teléfono ya está registrado en otro contacto.")
+        return
+      }
+    }
+
+    const payload = { ...form, phone: normalizedPhone }
     const { error } = editingContactId
-      ? await supabase.from("contacts").update({ first_name: form.first_name, last_name: form.last_name, email: form.email, phone: form.phone, company: form.company, status: form.status }).eq("id", editingContactId)
-      : await supabase.from("contacts").insert([{ ...form, organization_id: orgId }])
+      ? await supabase.from("contacts").update({ first_name: payload.first_name, last_name: payload.last_name, email: payload.email, phone: payload.phone, company: payload.company, status: payload.status }).eq("id", editingContactId)
+      : await supabase.from("contacts").insert([{ ...payload, organization_id: orgId }])
     if (error) { alert((editingContactId ? "Error actualizando: " : "Error guardando: ") + error.message); return }
     resetForm(); setShowForm(false); loadContacts()
   }
@@ -264,15 +296,21 @@ export default function ContactsPage() {
         lastName  = parts.slice(1).join(" ")
       }
       if (!firstName || !row.email || !row.phone) { skipped.push(i + 2); continue }
-      parsed.push({ first_name: firstName, last_name: lastName, email: row.email, phone: row.phone, company: row.company ?? "", status: row.status ?? "" })
+      // Normalizar teléfono al formato "+número"
+      const normalizedPhone = row.phone.trim().startsWith("+") ? row.phone.trim() : `+${row.phone.trim()}`
+      parsed.push({ first_name: firstName, last_name: lastName, email: row.email, phone: normalizedPhone, company: row.company ?? "", status: row.status ?? "" })
     }
     if (!parsed.length) { alert("No hay filas válidas."); return }
     setImportingCsv(true)
     const withOrg = orgId ? parsed.map((c) => ({ ...c, organization_id: orgId })) : parsed
-    const { error } = await supabase.from("contacts").insert(withOrg)
+    // Upsert: si el teléfono ya existe en la org, actualiza los datos del contacto
+    const { error } = await supabase.from("contacts").upsert(withOrg, {
+      onConflict: "organization_id,phone",
+      ignoreDuplicates: false,
+    })
     setImportingCsv(false)
     if (error) { alert("Error importando: " + error.message); return }
-    alert(`Se importaron ${parsed.length} contacto(s).${skipped.length ? `\n${skipped.length} omitidas.` : ""}`)
+    alert(`Se importaron/actualizaron ${parsed.length} contacto(s).${skipped.length ? `\n${skipped.length} omitidas.` : ""}`)
     loadContacts()
   }
 

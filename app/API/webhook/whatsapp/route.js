@@ -155,30 +155,25 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
     content = JSON.stringify(msg)
   }
 
-  // Buscar o crear contacto (tolera ambos formatos de phone y contactos sin org_id)
+  // Buscar o crear contacto — phone normalizado siempre con "+"
   const phone = "+" + waId
-  const phoneWithout = waId
 
   let contact = null
-  const phonesToTry = [phone, phoneWithout]
 
+  // Buscar por phone normalizado en la org
   if (orgId) {
-    for (const p of phonesToTry) {
-      if (contact) break
-      const { data } = await supabase.from("contacts").select("id, first_name, last_name")
-        .eq("phone", p).eq("organization_id", orgId).maybeSingle()
-      contact = data
-    }
+    const { data } = await supabase.from("contacts").select("id, first_name, last_name")
+      .eq("phone", phone).eq("organization_id", orgId).maybeSingle()
+    contact = data
   }
+
+  // Fallback: contacto huérfano (sin org_id), lo vinculamos a la org
   if (!contact) {
-    for (const p of phonesToTry) {
-      if (contact) break
-      const { data } = await supabase.from("contacts").select("id, first_name, last_name")
-        .eq("phone", p).is("organization_id", null).maybeSingle()
-      if (data) {
-        if (orgId) await supabase.from("contacts").update({ organization_id: orgId }).eq("id", data.id)
-        contact = data
-      }
+    const { data } = await supabase.from("contacts").select("id, first_name, last_name")
+      .eq("phone", phone).is("organization_id", null).maybeSingle()
+    if (data) {
+      if (orgId) await supabase.from("contacts").update({ organization_id: orgId }).eq("id", data.id)
+      contact = data
     }
   }
 
@@ -194,10 +189,23 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
       .single()
 
     if (error) {
-      console.error("[webhook] Error creando contacto:", error.message)
-      return
+      // Condición de carrera: otro request ya creó el contacto (unique violation)
+      if (error.code === "23505") {
+        const { data: existing } = await supabase.from("contacts").select("id, first_name, last_name")
+          .eq("phone", phone).eq("organization_id", orgId).maybeSingle()
+        if (existing) {
+          contact = existing
+        } else {
+          console.error("[webhook] Error creando contacto:", error.message)
+          return
+        }
+      } else {
+        console.error("[webhook] Error creando contacto:", error.message)
+        return
+      }
+    } else {
+      contact = newContact
     }
-    contact = newContact
   }
 
   // Buscar o crear conversación

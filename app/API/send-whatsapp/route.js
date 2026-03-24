@@ -150,10 +150,24 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
       .select("id")
       .single()
     if (contactError) {
-      console.error("[send-whatsapp] Error creando contacto:", contactError.message)
-      return
+      // Condición de carrera: el contacto ya fue creado por otro proceso
+      if (contactError.code === "23505") {
+        const { data: existing } = await supabase
+          .from("contacts").select("id")
+          .eq("phone", normalizedPhone).eq("organization_id", orgId).maybeSingle()
+        if (existing) {
+          contact = existing
+        } else {
+          console.error("[send-whatsapp] Error creando contacto:", contactError.message)
+          return
+        }
+      } else {
+        console.error("[send-whatsapp] Error creando contacto:", contactError.message)
+        return
+      }
+    } else {
+      contact = newContact
     }
-    contact = newContact
   }
 
   // Buscar o crear conversación
