@@ -114,15 +114,30 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
   const supabase = getServiceClient()
   const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`
 
+  // Buscar contacto probando con y sin prefijo "+" para cubrir ambos formatos de almacenamiento
+  const phoneWithout = normalizedPhone.replace(/^\+/, "")
   let contactQuery = supabase
     .from("contacts")
     .select("id")
-    .eq("phone", normalizedPhone)
+    .or(`phone.eq.${normalizedPhone},phone.eq.${phoneWithout}`)
   if (orgId) contactQuery = contactQuery.eq("organization_id", orgId)
 
-  const { data: contact } = await contactQuery.maybeSingle()
-  if (!contact) return
+  let { data: contact } = await contactQuery.maybeSingle()
 
+  if (!contact) {
+    const { data: newContact, error: contactError } = await supabase
+      .from("contacts")
+      .insert({ phone: normalizedPhone, first_name: phoneWithout, organization_id: orgId ?? null })
+      .select("id")
+      .single()
+    if (contactError) {
+      console.error("[send-whatsapp] Error creando contacto:", contactError.message)
+      return
+    }
+    contact = newContact
+  }
+
+  // Buscar o crear conversación
   let convQuery = supabase
     .from("conversations")
     .select("id")
@@ -133,8 +148,43 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
     .limit(1)
   if (orgId) convQuery = convQuery.eq("organization_id", orgId)
 
-  const { data: conversation } = await convQuery.maybeSingle()
-  if (!conversation) return
+  let { data: conversation } = await convQuery.maybeSingle()
+
+  if (!conversation) {
+    // Obtener la primera etapa del embudo de la org
+    let defaultStage = "Nuevo contacto"
+    let stageQuery = supabase
+      .from("pipeline_stages")
+      .select("name")
+      .order("position", { ascending: true })
+      .limit(1)
+    if (orgId) stageQuery = stageQuery.eq("organization_id", orgId)
+    const { data: firstStage } = await stageQuery.maybeSingle()
+    if (firstStage?.name) defaultStage = firstStage.name
+
+    const now = new Date().toISOString()
+    const { data: newConv, error: convError } = await supabase
+      .from("conversations")
+      .insert({
+        contact_id:      contact.id,
+        channel:         "whatsapp",
+        status:          "open",
+        mode:            "bot",
+        pipeline_stage:  defaultStage,
+        last_message:    `📋 Plantilla: ${templateName}`,
+        last_activity:   now,
+        unread_count:    0,
+        organization_id: orgId ?? null,
+      })
+      .select("id")
+      .single()
+
+    if (convError) {
+      console.error("[send-whatsapp] Error creando conversación:", convError.message)
+      return
+    }
+    conversation = newConv
+  }
 
   const now = new Date().toISOString()
 
@@ -152,7 +202,7 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
     created_at:      now,
   })
 
-  // Resetear a modo bot para que pueda responder las replies a la plantilla
+  // Actualizar conversación con último mensaje y modo bot
   await supabase
     .from("conversations")
     .update({ last_message: `📋 Plantilla: ${templateName}`, last_activity: now, mode: "bot" })
