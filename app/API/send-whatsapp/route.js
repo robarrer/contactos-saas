@@ -108,21 +108,40 @@ export async function POST(req) {
   }
 }
 
+// ─── Buscar contacto por teléfono con fallback sin filtro de org ─────────────
+// Contactos creados desde el dashboard no tienen organization_id; los creados
+// desde el webhook sí. Probamos las 4 combinaciones (+/sin +, con/sin org).
+async function findContact(supabase, phoneWith, phoneWithout, orgId) {
+  const phones = [phoneWith, phoneWithout]
+  // Primero con filtro de org (match más específico)
+  if (orgId) {
+    for (const p of phones) {
+      const { data } = await supabase
+        .from("contacts").select("id").eq("phone", p).eq("organization_id", orgId).maybeSingle()
+      if (data) return data
+    }
+  }
+  // Fallback sin filtro de org (contactos creados desde dashboard con org_id = NULL)
+  for (const p of phones) {
+    const { data } = await supabase
+      .from("contacts").select("id").eq("phone", p).is("organization_id", null).maybeSingle()
+    if (data) {
+      // Asociar contacto huérfano a la org actual
+      if (orgId) await supabase.from("contacts").update({ organization_id: orgId }).eq("id", data.id)
+      return data
+    }
+  }
+  return null
+}
+
 // ─── Guardar mensaje de plantilla en Supabase ─────────────────────────────────
 
 async function saveTemplateMessage({ phone, templateName, templateRendered, waMessageId, status, orgId }) {
   const supabase = getServiceClient()
   const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`
 
-  // Buscar contacto probando con y sin prefijo "+" para cubrir ambos formatos de almacenamiento
   const phoneWithout = normalizedPhone.replace(/^\+/, "")
-  let contactQuery = supabase
-    .from("contacts")
-    .select("id")
-    .or(`phone.eq.${normalizedPhone},phone.eq.${phoneWithout}`)
-  if (orgId) contactQuery = contactQuery.eq("organization_id", orgId)
-
-  let { data: contact } = await contactQuery.maybeSingle()
+  let contact = await findContact(supabase, normalizedPhone, phoneWithout, orgId)
 
   if (!contact) {
     const { data: newContact, error: contactError } = await supabase

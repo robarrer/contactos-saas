@@ -20,6 +20,7 @@ type DbConversation = {
   last_inbound_at: string | null
   wa_contact_id: string | null
   created_at: string
+  tags: string[] | null
 }
 
 type DbMessage = {
@@ -62,7 +63,7 @@ function mapConversation(db: DbConversation): Conversation {
     lastMessage:     db.last_message ?? "",
     lastActivityAt:  db.last_activity,
     lastInboundAt:   db.last_inbound_at ?? null,
-    tags:            [],
+    tags:            db.tags ?? [],
   }
 }
 
@@ -375,10 +376,10 @@ export function useSupabaseInbox() {
     return true
   }, [])
 
-  // ── Actualizar conversación (etapa, agente, modo) ─────────────────────────
+  // ── Actualizar conversación (etapa, agente, modo, tags) ──────────────────
   const updateConversation = useCallback(async (
     conversationId: string,
-    updates: Partial<{ pipeline_stage: string; assigned_agent: string | null; mode: string }>
+    updates: Partial<{ pipeline_stage: string; assigned_agent: string | null; mode: string; tags: string[] }>
   ) => {
     const { error } = await supabase
       .from("conversations")
@@ -398,6 +399,7 @@ export function useSupabaseInbox() {
           ...(updates.pipeline_stage && { pipelineStage: updates.pipeline_stage as Conversation["pipelineStage"] }),
           ...(updates.assigned_agent !== undefined && { assignedAgentId: updates.assigned_agent }),
           ...(updates.mode && { botStatus: updates.mode === "bot" ? "bot" : "human" }),
+          ...(updates.tags !== undefined && { tags: updates.tags }),
         }
       })
     )
@@ -446,7 +448,7 @@ export function useSupabaseInbox() {
         (payload) => {
           const updated = mapConversation(payload.new as DbConversation)
           setConversations((prev) =>
-            prev.map((c) => (c.id === updated.id ? { ...updated, tags: c.tags } : c))
+            prev.map((c) => (c.id === updated.id ? updated : c))
           )
         }
       )

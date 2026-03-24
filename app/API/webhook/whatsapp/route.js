@@ -155,15 +155,32 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
     content = JSON.stringify(msg)
   }
 
-  // Buscar o crear contacto
+  // Buscar o crear contacto (tolera ambos formatos de phone y contactos sin org_id)
   const phone = "+" + waId
-  const contactQuery = supabase
-    .from("contacts")
-    .select("id, first_name, last_name")
-    .eq("phone", phone)
-  if (orgId) contactQuery.eq("organization_id", orgId)
+  const phoneWithout = waId
 
-  let { data: contact } = await contactQuery.maybeSingle()
+  let contact = null
+  const phonesToTry = [phone, phoneWithout]
+
+  if (orgId) {
+    for (const p of phonesToTry) {
+      if (contact) break
+      const { data } = await supabase.from("contacts").select("id, first_name, last_name")
+        .eq("phone", p).eq("organization_id", orgId).maybeSingle()
+      contact = data
+    }
+  }
+  if (!contact) {
+    for (const p of phonesToTry) {
+      if (contact) break
+      const { data } = await supabase.from("contacts").select("id, first_name, last_name")
+        .eq("phone", p).is("organization_id", null).maybeSingle()
+      if (data) {
+        if (orgId) await supabase.from("contacts").update({ organization_id: orgId }).eq("id", data.id)
+        contact = data
+      }
+    }
+  }
 
   if (!contact) {
     const displayName = waContact?.profile?.name ?? phone

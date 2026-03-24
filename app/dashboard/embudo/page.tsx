@@ -4,8 +4,8 @@ import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
 import {
-  AGENTS,
   PIPELINE_STAGES,
+  type Agent,
   type BotStatus,
   type Channel,
   type Conversation,
@@ -13,6 +13,7 @@ import {
   type PipelineStage,
   contactFullName,
 } from "../soporte/mockData"
+import { useOrgMembers } from "../soporte/useOrgMembers"
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -243,7 +244,7 @@ function StageMultiSelect({
 // ─── Top bar ─────────────────────────────────────────────────────────────────
 
 function TopBar({
-  view, setView, filters, setFilters, total, showStageManager, setShowStageManager,
+  view, setView, filters, setFilters, total, showStageManager, setShowStageManager, orgMembers,
 }: {
   view: "lista" | "embudo"
   setView: (v: "lista" | "embudo") => void
@@ -252,6 +253,7 @@ function TopBar({
   total: number
   showStageManager: boolean
   setShowStageManager: (v: boolean) => void
+  orgMembers: Agent[]
 }) {
   const upd = (patch: Partial<Filters>) => setFilters({ ...filters, ...patch })
 
@@ -301,7 +303,7 @@ function TopBar({
         {/* Agent */}
         <select value={filters.agentId} onChange={(e) => upd({ agentId: e.target.value })} style={filterInput}>
           <option value="all">Agente</option>
-          {AGENTS.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {orgMembers.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
 
         {/* Stage multiselect — dropdown con checkboxes */}
@@ -330,11 +332,13 @@ function ListView({
   contacts,
   onUpdate,
   onOpen,
+  orgMembers,
 }: {
   conversations: Conversation[]
   contacts: MockContact[]
   onUpdate: (c: Conversation) => void
   onOpen: (id: string) => void
+  orgMembers: Agent[]
 }) {
   const [sortCol, setSortCol] = useState<SortCol>("lastActivityAt")
   const [sortDir, setSortDir] = useState<SortDir>("desc")
@@ -403,7 +407,7 @@ function ListView({
           <select value={bulkAgent} onChange={(e) => setBulkAgent(e.target.value)} style={filterInput}>
             <option value="">Reasignar agente…</option>
             <option value="">Sin asignar</option>
-            {AGENTS.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            {orgMembers.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
           <select value={bulkStage} onChange={(e) => setBulkStage(e.target.value as PipelineStage | "")} style={filterInput}>
             <option value="">Mover etapa…</option>
@@ -441,7 +445,7 @@ function ListView({
         <tbody>
           {sorted.map((conv) => {
             const contact = contacts.find((c) => c.id === conv.contactId)
-            const agent = AGENTS.find((a) => a.id === conv.assignedAgentId)
+            const agent = orgMembers.find((a) => a.id === conv.assignedAgentId)
             const isSelected = selected.has(conv.id)
             const hasUnread = conv.unreadCount > 0
 
@@ -496,7 +500,7 @@ function ListView({
                     style={{ ...filterInput, background: "transparent", border: "none", fontSize: 12, cursor: "pointer", padding: "3px 4px" }}
                   >
                     <option value="">Sin asignar</option>
-                    {AGENTS.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    {orgMembers.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </td>
                 <td style={td}>
@@ -528,12 +532,14 @@ function EmbudoView({
   stages,
   onUpdate,
   onOpen,
+  orgMembers,
 }: {
   conversations: Conversation[]
   contacts: MockContact[]
   stages: StageConfig[]
   onUpdate: (c: Conversation) => void
   onOpen: (id: string) => void
+  orgMembers: Agent[]
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<string | null>(null)
@@ -602,6 +608,7 @@ function EmbudoView({
                     onDragEnd={() => { setDraggingId(null); setOverStage(null) }}
                     onUpdate={onUpdate}
                     onOpen={onOpen}
+                    orgMembers={orgMembers}
                   />
                 )
               })}
@@ -614,7 +621,7 @@ function EmbudoView({
 }
 
 function KanbanCard({
-  conv, contact, stages, isDragging, isOrphan, onDragStart, onDragEnd, onUpdate, onOpen,
+  conv, contact, stages, isDragging, isOrphan, onDragStart, onDragEnd, onUpdate, onOpen, orgMembers,
 }: {
   conv: Conversation
   contact: MockContact | undefined
@@ -625,8 +632,9 @@ function KanbanCard({
   onDragEnd: () => void
   onUpdate: (c: Conversation) => void
   onOpen: (id: string) => void
+  orgMembers: Agent[]
 }) {
-  const agent = AGENTS.find((a) => a.id === conv.assignedAgentId)
+  const agent = orgMembers.find((a) => a.id === conv.assignedAgentId)
   const hasUnread = conv.unreadCount > 0
 
   return (
@@ -1035,6 +1043,7 @@ function useEmbudoData() {
 export default function EmbudoPage() {
   const router = useRouter()
   const { conversations, contacts, stages, aiAgents, loading, updateConversation, setConversations, saveStages } = useEmbudoData()
+  const { orgMembers } = useOrgMembers()
   const [view, setView] = useState<"lista" | "embudo">("embudo")
   const [showStageManager, setShowStageManager] = useState(false)
   const [filters, setFilters] = useState<Filters>({
@@ -1064,6 +1073,7 @@ export default function EmbudoPage() {
         total={filtered.length}
         showStageManager={showStageManager}
         setShowStageManager={setShowStageManager}
+        orgMembers={orgMembers}
       />
 
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1072,9 +1082,9 @@ export default function EmbudoPage() {
             Cargando conversaciones…
           </div>
         ) : view === "lista" ? (
-          <ListView conversations={filtered} contacts={contacts} onUpdate={onUpdate} onOpen={onOpen} />
+          <ListView conversations={filtered} contacts={contacts} onUpdate={onUpdate} onOpen={onOpen} orgMembers={orgMembers} />
         ) : (
-          <EmbudoView conversations={filtered} contacts={contacts} stages={stages} onUpdate={onUpdate} onOpen={onOpen} />
+          <EmbudoView conversations={filtered} contacts={contacts} stages={stages} onUpdate={onUpdate} onOpen={onOpen} orgMembers={orgMembers} />
         )}
       </div>
 

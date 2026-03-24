@@ -96,6 +96,15 @@ export default function ContactsPage() {
   const [sendingTemplate, setSendingTemplate] = useState<string | null>(null)
   const csvInputRef = useRef<HTMLInputElement>(null)
   const [importingCsv, setImportingCsv] = useState(false)
+  const [orgId, setOrgId] = useState<string | null>(null)
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
+        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
+    })
+  }, [])
 
   async function loadContacts() {
     setLoading(true)
@@ -181,7 +190,7 @@ export default function ContactsPage() {
     }
     const { error } = editingContactId
       ? await supabase.from("contacts").update({ first_name: form.first_name, last_name: form.last_name, email: form.email, phone: form.phone, company: form.company, status: form.status }).eq("id", editingContactId)
-      : await supabase.from("contacts").insert([form])
+      : await supabase.from("contacts").insert([{ ...form, organization_id: orgId }])
     if (error) { alert((editingContactId ? "Error actualizando: " : "Error guardando: ") + error.message); return }
     resetForm(); setShowForm(false); loadContacts()
   }
@@ -259,7 +268,8 @@ export default function ContactsPage() {
     }
     if (!parsed.length) { alert("No hay filas válidas."); return }
     setImportingCsv(true)
-    const { error } = await supabase.from("contacts").insert(parsed)
+    const withOrg = orgId ? parsed.map((c) => ({ ...c, organization_id: orgId })) : parsed
+    const { error } = await supabase.from("contacts").insert(withOrg)
     setImportingCsv(false)
     if (error) { alert("Error importando: " + error.message); return }
     alert(`Se importaron ${parsed.length} contacto(s).${skipped.length ? `\n${skipped.length} omitidas.` : ""}`)

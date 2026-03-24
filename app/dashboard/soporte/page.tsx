@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
 import {
-  AGENTS,
   PIPELINE_STAGES,
+  type Agent,
   type BotStatus,
   type Channel,
   type Conversation,
@@ -14,6 +14,7 @@ import {
   contactFullName,
 } from "./mockData"
 import { useSupabaseInbox } from "./useSupabaseInbox"
+import { useOrgMembers } from "./useOrgMembers"
 
 type CannedResponse = {
   id: string
@@ -241,6 +242,8 @@ function ConversationList({
   onSearch,
   onLoadMore,
   stages,
+  orgMembers,
+  currentUserId,
 }: {
   conversations: Conversation[]
   contacts: MockContact[]
@@ -252,6 +255,8 @@ function ConversationList({
   onSearch: (q: string) => void
   onLoadMore: () => void
   stages: string[]
+  orgMembers: Agent[]
+  currentUserId: string | null
 }) {
   const [search, setSearch] = useState("")
   const [tab, setTab] = useState<FilterTab>("all")
@@ -290,7 +295,7 @@ function ConversationList({
     if (tab === "bot" && c.botStatus !== "bot") return false
     if (tab === "human" && c.botStatus !== "human") return false
     if (tab === "unassigned" && c.assignedAgentId !== null) return false
-    if (tab === "mine" && c.assignedAgentId !== "agent-1") return false
+    if (tab === "mine" && c.assignedAgentId !== currentUserId) return false
     if (channelFilter !== "all" && c.channel !== channelFilter) return false
     if (stageFilter !== "all" && c.pipelineStage !== stageFilter) return false
     return true
@@ -420,7 +425,7 @@ function ConversationList({
         )}
         {filtered.map((conv) => {
           const contact = contacts.find((c) => c.id === conv.contactId)!
-          const agent = AGENTS.find((a) => a.id === conv.assignedAgentId)
+          const agent = orgMembers.find((a) => a.id === conv.assignedAgentId)
           const isActive = conv.id === activeId
 
           return (
@@ -611,6 +616,8 @@ function ChatPanel({
   showContactPanel,
   onToggleContactPanel,
   stages,
+  orgMembers,
+  currentUserId,
 }: {
   conversation: Conversation
   contact: MockContact
@@ -620,6 +627,8 @@ function ChatPanel({
   showContactPanel?: boolean
   onToggleContactPanel?: () => void
   stages: string[]
+  orgMembers: Agent[]
+  currentUserId: string | null
 }) {
   const [inputText, setInputText] = useState("")
   const [isInternal, setIsInternal] = useState(false)
@@ -689,11 +698,11 @@ function ChatPanel({
     onUpdateConversation({
       ...conversation,
       botStatus: conversation.botStatus === "bot" ? "human" : "bot",
-      assignedAgentId: conversation.botStatus === "bot" ? "agent-1" : null,
+      assignedAgentId: conversation.botStatus === "bot" ? (currentUserId ?? null) : null,
     })
   }
 
-  const assignedAgent = AGENTS.find((a) => a.id === conversation.assignedAgentId)
+  const assignedAgent = orgMembers.find((a) => a.id === conversation.assignedAgentId)
 
   // Group messages by date
   const grouped: { date: string; msgs: Message[] }[] = []
@@ -884,6 +893,7 @@ function ChatPanel({
                   isFirst={idx === 0}
                   isLast={idx === cluster.length - 1}
                   clusterSize={cluster.length}
+                  orgMembers={orgMembers}
                 />
               ))
             )}
@@ -1157,6 +1167,7 @@ function MessageBubble({
   isFirst = true,
   isLast = true,
   clusterSize = 1,
+  orgMembers = [],
 }: {
   message: Message
   hideAvatar?: boolean
@@ -1164,6 +1175,7 @@ function MessageBubble({
   isFirst?: boolean
   isLast?: boolean
   clusterSize?: number
+  orgMembers?: Agent[]
 }) {
   const isContact = message.sender === "contact"
   const isBot = message.sender === "bot"
@@ -1171,7 +1183,7 @@ function MessageBubble({
   const isNote = message.isInternal
   const isTemplate = message.type === "template"
 
-  const agent = isAgent ? AGENTS.find((a) => a.id === message.agentId) : null
+  const agent = isAgent ? orgMembers.find((a) => a.id === message.agentId) : null
 
   if (isNote) {
     return (
@@ -1323,26 +1335,37 @@ function ContactInfoPanel({
   onUpdateConversation,
   onTogglePanel,
   stages,
+  orgMembers,
 }: {
   contact: MockContact
   conversation: Conversation
   onUpdateConversation: (c: Conversation) => void
   onTogglePanel?: () => void
   stages: string[]
+  orgMembers: Agent[]
 }) {
   const [tag, setTag] = useState("")
   const [localTags, setLocalTags] = useState(conversation.tags)
-  const assignedAgent = AGENTS.find((a) => a.id === conversation.assignedAgentId)
+  const assignedAgent = orgMembers.find((a) => a.id === conversation.assignedAgentId)
+
+  useEffect(() => {
+    setLocalTags(conversation.tags)
+  }, [conversation.id, conversation.tags])
 
   function addTag(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && tag.trim()) {
-      setLocalTags((prev) => [...prev, tag.trim()])
+      const trimmed = tag.trim()
+      const newTags = [...localTags, trimmed]
+      setLocalTags(newTags)
       setTag("")
+      onUpdateConversation({ ...conversation, tags: newTags })
     }
   }
 
   function removeTag(t: string) {
-    setLocalTags((prev) => prev.filter((x) => x !== t))
+    const newTags = localTags.filter((x) => x !== t)
+    setLocalTags(newTags)
+    onUpdateConversation({ ...conversation, tags: newTags })
   }
 
   const convMessages: Message[] = []
@@ -1438,7 +1461,7 @@ function ContactInfoPanel({
           style={{ ...selectMiniStyle, width: "100%" }}
         >
           <option value="">Sin asignar</option>
-          {AGENTS.map((a) => (
+          {orgMembers.map((a) => (
             <option key={a.id} value={a.id}>{a.name}</option>
           ))}
         </select>
@@ -1541,6 +1564,8 @@ export default function SoportePage() {
     setConversations,
   } = useSupabaseInbox()
 
+  const { orgMembers, currentUserId } = useOrgMembers()
+
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
   const [showContactPanel, setShowContactPanel] = useState(true)
   const [stages, setStages] = useState<string[]>(PIPELINE_STAGES)
@@ -1569,6 +1594,7 @@ export default function SoportePage() {
       pipeline_stage: updated.pipelineStage,
       assigned_agent: updated.assignedAgentId,
       mode:           updated.botStatus === "bot" ? "bot" : "agent",
+      tags:           updated.tags,
     })
   }
 
@@ -1631,6 +1657,8 @@ export default function SoportePage() {
             onSearch={searchConversations}
             onLoadMore={loadMore}
             stages={stages}
+            orgMembers={orgMembers}
+            currentUserId={currentUserId}
           />
         )}
       </div>
@@ -1648,6 +1676,8 @@ export default function SoportePage() {
             showContactPanel={showContactPanel}
             onToggleContactPanel={() => setShowContactPanel((v) => !v)}
             stages={stages}
+            orgMembers={orgMembers}
+            currentUserId={currentUserId}
           />
         ) : (
           <div
@@ -1688,6 +1718,7 @@ export default function SoportePage() {
             onUpdateConversation={handleUpdateConversation}
             onTogglePanel={() => setShowContactPanel(false)}
             stages={stages}
+            orgMembers={orgMembers}
           />
         ) : (
           <div
