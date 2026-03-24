@@ -197,6 +197,18 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
   let { data: conversation } = await convQuery.maybeSingle()
 
   if (!conversation) {
+    // Obtener la primera etapa del embudo
+    let defaultStage = "Nuevo contacto"
+    const { data: firstStage, error: stageError } = await supabase
+      .from("pipeline_stages")
+      .select("name")
+      .order("position", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    console.log("[webhook] pipeline_stages query:", { firstStage, stageError, orgId })
+    if (firstStage?.name) defaultStage = firstStage.name
+    console.log("[webhook] defaultStage resuelto:", defaultStage)
+
     const { data: newConv, error } = await supabase
       .from("conversations")
       .insert({
@@ -204,7 +216,7 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
         channel:         "whatsapp",
         status:          "open",
         mode:            "bot",
-        pipeline_stage:  "Nuevo contacto",
+        pipeline_stage:  defaultStage,
         wa_contact_id:   waId,
         last_message:    content,
         last_activity:   timestamp,
