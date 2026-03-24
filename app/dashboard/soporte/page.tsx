@@ -305,7 +305,7 @@ function ConversationList({
   ]
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minWidth: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0 }}>
       {/* Search */}
       <div style={{ padding: "12px 12px 8px" }}>
         <div style={{ position: "relative" }}>

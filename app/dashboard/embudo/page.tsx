@@ -553,10 +553,19 @@ function EmbudoView({
     setDraggingId(null); setOverStage(null)
   }
 
+  // Nombres e IDs válidos de etapas actuales
+  const knownStageKeys = new Set(stages.flatMap((s) => [s.name, s.id]))
+  const isFirstStage = (stageId: string) => stages[0]?.id === stageId
+
   return (
-    <div style={{ display: "flex", gap: 12, overflowX: "auto", overflowY: "hidden", padding: "16px 20px", flex: 1, alignItems: "stretch" }}>
+    <div style={{ display: "flex", gap: 12, overflowX: "auto", overflowY: "hidden", padding: "16px 20px", flex: 1, minHeight: 0, alignItems: "stretch" }}>
       {stages.map((stage) => {
-        const cards = conversations.filter((c) => c.pipelineStage === stage.name || c.pipelineStage === stage.id)
+        const cards = conversations.filter((c) => {
+          if (c.pipelineStage === stage.name || c.pipelineStage === stage.id) return true
+          // Conversaciones huérfanas (etapa renombrada/eliminada) → primera columna
+          if (isFirstStage(stage.id) && !knownStageKeys.has(c.pipelineStage)) return true
+          return false
+        })
         const isOver = overStage === stage.name
         return (
           <div
@@ -564,7 +573,7 @@ function EmbudoView({
             onDragOver={(e) => { e.preventDefault(); setOverStage(stage.name) }}
             onDragLeave={() => setOverStage(null)}
             onDrop={(e) => handleDrop(e, stage.name)}
-            style={{ width: 280, flexShrink: 0, background: isOver ? "#f0f7ff" : "#f3f4f6", borderRadius: 12, border: `2px solid ${isOver ? stage.color : "transparent"}`, transition: "border-color 150ms, background 150ms", display: "flex", flexDirection: "column", overflow: "hidden" }}
+            style={{ width: 280, flexShrink: 0, background: isOver ? "#f0f7ff" : "#f3f4f6", borderRadius: 12, border: `2px solid ${isOver ? stage.color : "transparent"}`, transition: "border-color 150ms, background 150ms", display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}
           >
             {/* Column header */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid #e5e7eb", borderLeft: `4px solid ${stage.color}`, background: "white", borderRadius: "10px 10px 0 0" }}>
@@ -579,19 +588,23 @@ function EmbudoView({
                   Sin conversaciones
                 </div>
               )}
-              {cards.map((conv) => (
-                <KanbanCard
-                  key={conv.id}
-                  conv={conv}
-                  contact={contacts.find((c) => c.id === conv.contactId)}
-                  stages={stages}
-                  isDragging={draggingId === conv.id}
-                  onDragStart={(e) => handleDragStart(e, conv.id)}
-                  onDragEnd={() => { setDraggingId(null); setOverStage(null) }}
-                  onUpdate={onUpdate}
-                  onOpen={onOpen}
-                />
-              ))}
+              {cards.map((conv) => {
+                const isOrphan = !knownStageKeys.has(conv.pipelineStage)
+                return (
+                  <KanbanCard
+                    key={conv.id}
+                    conv={conv}
+                    contact={contacts.find((c) => c.id === conv.contactId)}
+                    stages={stages}
+                    isDragging={draggingId === conv.id}
+                    isOrphan={isOrphan}
+                    onDragStart={(e) => handleDragStart(e, conv.id)}
+                    onDragEnd={() => { setDraggingId(null); setOverStage(null) }}
+                    onUpdate={onUpdate}
+                    onOpen={onOpen}
+                  />
+                )
+              })}
             </div>
           </div>
         )
@@ -601,18 +614,18 @@ function EmbudoView({
 }
 
 function KanbanCard({
-  conv, contact, stages, isDragging, onDragStart, onDragEnd, onUpdate, onOpen,
+  conv, contact, stages, isDragging, isOrphan, onDragStart, onDragEnd, onUpdate, onOpen,
 }: {
   conv: Conversation
   contact: MockContact | undefined
   stages: StageConfig[]
   isDragging: boolean
+  isOrphan: boolean
   onDragStart: (e: React.DragEvent) => void
   onDragEnd: () => void
   onUpdate: (c: Conversation) => void
   onOpen: (id: string) => void
 }) {
-  const [hovered, setHovered] = useState(false)
   const agent = AGENTS.find((a) => a.id === conv.assignedAgentId)
   const hasUnread = conv.unreadCount > 0
 
@@ -621,16 +634,20 @@ function KanbanCard({
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
       onClick={() => onOpen(conv.id)}
       style={{
         background: "white", borderRadius: 10, cursor: "grab", userSelect: "none",
+        flexShrink: 0,
         opacity: isDragging ? 0.4 : 1,
-        boxShadow: hovered ? "0 4px 16px rgba(0,0,0,0.1)" : "0 1px 3px rgba(0,0,0,0.06)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
         border: "1px solid #e5e7eb", transition: "box-shadow 150ms", overflow: "hidden",
       }}
     >
+      {isOrphan && (
+        <div style={{ background: "#fef9c3", borderBottom: "1px solid #fde68a", padding: "4px 10px", fontSize: 11, color: "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
+          ⚠ Etapa desconocida — arrastra para reasignar
+        </div>
+      )}
       <div style={{ padding: 12 }}>
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -670,38 +687,6 @@ function KanbanCard({
       )}
       </div>
 
-      {/* Hover quick actions — siempre renderizadas, visibles solo en hover */}
-      <div
-        style={{
-          borderTop: hovered ? "1px solid #f3f4f6" : "1px solid transparent",
-          padding: "7px 10px",
-          display: "flex",
-          gap: 6,
-          background: "white",
-          overflow: "hidden",
-          maxHeight: hovered ? 60 : 0,
-          opacity: hovered ? 1 : 0,
-          transition: "max-height 150ms ease, opacity 150ms ease",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button onClick={() => onOpen(conv.id)} style={{ ...primaryBtn, fontSize: 11, padding: "5px 10px", flex: "0 0 auto" }}>Abrir</button>
-        <select
-          value={conv.assignedAgentId ?? ""}
-          onChange={(e) => onUpdate({ ...conv, assignedAgentId: e.target.value || null })}
-          style={{ ...filterInput, fontSize: 11, flex: 1, minWidth: 0 }}
-        >
-          <option value="">Reasignar…</option>
-          {AGENTS.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
-        <select
-          value={conv.pipelineStage}
-          onChange={(e) => onUpdate({ ...conv, pipelineStage: e.target.value as PipelineStage })}
-          style={{ ...filterInput, fontSize: 11, flex: 1, minWidth: 0 }}
-        >
-          {stages.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-      </div>
     </div>
   )
 }
@@ -935,7 +920,7 @@ function useEmbudoData() {
         channel:         (row.channel as Conversation["channel"]) ?? "whatsapp",
         botStatus:       row.mode === "bot" ? "bot" : "human",
         assignedAgentId: row.assigned_agent ?? null,
-        pipelineStage:   (row.pipeline_stage as Conversation["pipelineStage"]) ?? "Nuevo contacto",
+        pipelineStage:   (row.pipeline_stage as Conversation["pipelineStage"]) ?? "",
         unreadCount:     row.unread_count ?? 0,
         lastMessage:     row.last_message ?? "",
         lastActivityAt:  row.last_activity,
@@ -970,6 +955,34 @@ function useEmbudoData() {
       console.error("Error guardando etapas:", upsertError)
       alert("Error guardando etapas: " + upsertError.message)
       return
+    }
+
+    // Migrar conversaciones de etapas renombradas
+    const renames = newStages.filter((newStage) => {
+      const old = stages.find((s) => s.id === newStage.id)
+      return old && old.name !== newStage.name
+    })
+
+    for (const renamed of renames) {
+      const oldName = stages.find((s) => s.id === renamed.id)!.name
+      await supabase
+        .from("conversations")
+        .update({ pipeline_stage: renamed.name })
+        .eq("pipeline_stage", oldName)
+    }
+
+    // Actualizar estado local de conversaciones con los nuevos nombres
+    if (renames.length > 0) {
+      const nameMap = Object.fromEntries(
+        renames.map((s) => [stages.find((o) => o.id === s.id)!.name, s.name])
+      )
+      setConversations((prev) =>
+        prev.map((c) =>
+          nameMap[c.pipelineStage]
+            ? { ...c, pipelineStage: nameMap[c.pipelineStage] as Conversation["pipelineStage"] }
+            : c
+        )
+      )
     }
 
     const deletedIds = stages

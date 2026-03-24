@@ -57,7 +57,7 @@ function mapConversation(db: DbConversation): Conversation {
     channel:         (db.channel as Conversation["channel"]) ?? "whatsapp",
     botStatus:       db.mode === "bot" ? "bot" : "human",
     assignedAgentId: db.assigned_agent ?? null,
-    pipelineStage:   (db.pipeline_stage as Conversation["pipelineStage"]) ?? "Nuevo contacto",
+    pipelineStage:   (db.pipeline_stage as Conversation["pipelineStage"]) ?? "",
     unreadCount:     db.unread_count ?? 0,
     lastMessage:     db.last_message ?? "",
     lastActivityAt:  db.last_activity,
@@ -341,11 +341,14 @@ export function useSupabaseInbox() {
       .update({ last_message: text, last_activity: now })
       .eq("id", conversationId)
 
-    setConversations((prev) =>
-      prev.map((c) =>
+    setConversations((prev) => {
+      const updated = prev.map((c) =>
         c.id === conversationId ? { ...c, lastMessage: text, lastActivityAt: now } : c
       )
-    )
+      return updated.sort(
+        (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
+      )
+    })
 
     if (!isInternal) {
       const waId = waMapRef.current[conversationId]
@@ -415,8 +418,8 @@ export function useSupabaseInbox() {
             if (prev.find((m) => m.id === newMsg.id)) return prev
             return [...prev, newMsg]
           })
-          setConversations((prev) =>
-            prev.map((c) => {
+          setConversations((prev) => {
+            const updated = prev.map((c) => {
               if (c.id !== newMsg.conversationId) return c
               const isActive = activeConvIdRef.current === c.id
               return {
@@ -426,7 +429,10 @@ export function useSupabaseInbox() {
                 unreadCount:    isActive ? 0 : c.unreadCount + 1,
               }
             })
-          )
+            return updated.sort(
+              (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
+            )
+          })
         }
       )
       .on(
