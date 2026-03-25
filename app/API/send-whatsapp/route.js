@@ -99,6 +99,20 @@ export async function POST(req) {
           status:           "sent",
           orgId,
         })
+      } else {
+        // Guardar envíos fallidos para que aparezcan en el log de plantillas
+        const errorMsg = data?.error
+          ? (data.error.message ?? JSON.stringify(data.error))
+          : `HTTP ${response.status}`
+        await saveTemplateMessage({
+          phone,
+          templateName,
+          templateRendered: null,
+          waMessageId:      null,
+          status:           "failed",
+          orgId,
+          errorMessage:     errorMsg,
+        })
       }
     }
 
@@ -136,7 +150,7 @@ async function findContact(supabase, phoneWith, phoneWithout, orgId) {
 
 // ─── Guardar mensaje de plantilla en Supabase ─────────────────────────────────
 
-async function saveTemplateMessage({ phone, templateName, templateRendered, waMessageId, status, orgId }) {
+async function saveTemplateMessage({ phone, templateName, templateRendered, waMessageId, status, orgId, errorMessage = null }) {
   const supabase = getServiceClient()
   const normalizedPhone = phone.startsWith("+") ? phone : `+${phone}`
 
@@ -221,6 +235,10 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
 
   const now = new Date().toISOString()
 
+  const contentValue = status === "failed"
+    ? (errorMessage ?? "Error desconocido")
+    : (templateRendered ?? templateName)
+
   await supabase.from("messages").insert({
     conversation_id: conversation.id,
     organization_id: orgId ?? null,
@@ -228,7 +246,7 @@ async function saveTemplateMessage({ phone, templateName, templateRendered, waMe
     sender_type:     "agent",
     sender_name:     `template:${templateName}`,
     content_type:    "template",
-    content:         templateRendered ?? templateName,
+    content:         contentValue,
     is_internal:     false,
     wa_message_id:   waMessageId,
     status,
