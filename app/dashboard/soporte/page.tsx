@@ -25,6 +25,14 @@ type CannedResponse = {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+/** Convierte "media:<graphId>" en la URL del proxy interno, deja las blob:// URLs intactas. */
+function resolveMediaUrl(raw: string): string {
+  if (raw.startsWith("media:")) {
+    return `/API/media/${encodeURIComponent(raw.slice(6))}`
+  }
+  return raw
+}
+
 function relativeTime(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000
   if (diff < 60) return `${Math.floor(diff)}s`
@@ -613,6 +621,7 @@ function ChatPanel({
   messages,
   onUpdateConversation,
   onSendMessage,
+  onSendMedia,
   showContactPanel,
   onToggleContactPanel,
   stages,
@@ -624,6 +633,7 @@ function ChatPanel({
   messages: Message[]
   onUpdateConversation: (updated: Conversation) => void
   onSendMessage?: (text: string, isInternal: boolean) => Promise<boolean>
+  onSendMedia?: (file: File, caption: string) => Promise<boolean>
   showContactPanel?: boolean
   onToggleContactPanel?: () => void
   stages: string[]
@@ -636,8 +646,11 @@ function ChatPanel({
   const [cannedSearch, setCannedSearch] = useState("")
   const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([])
   const [localMessages, setLocalMessages] = useState<Message[]>(messages)
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [pendingPreviewUrl, setPendingPreviewUrl] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Cargar respuestas prediseñadas desde Supabase
   useEffect(() => {
@@ -657,7 +670,34 @@ function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [localMessages])
 
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl)
+    setPendingFile(file)
+    setPendingPreviewUrl(file.type.startsWith("image/") ? URL.createObjectURL(file) : null)
+    e.target.value = ""
+  }
+
+  function clearPendingFile() {
+    if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl)
+    setPendingFile(null)
+    setPendingPreviewUrl(null)
+  }
+
   async function sendMessage() {
+    if (pendingFile) {
+      const caption = inputText.trim()
+      setInputText("")
+      const fileToSend = pendingFile
+      clearPendingFile()
+      if (onSendMedia) {
+        await onSendMedia(fileToSend, caption)
+      }
+      inputRef.current?.focus()
+      return
+    }
+
     const text = inputText.trim()
     if (!text) return
     setInputText("")
@@ -1007,6 +1047,60 @@ function ChatPanel({
 
       {/* Input */}
       <div style={{ padding: "10px 12px 12px", flexShrink: 0, background: "white", borderTop: "1px solid #e5e7eb" }}>
+
+        {/* Preview del archivo pendiente */}
+        {pendingFile && (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 10px",
+            marginBottom: 8,
+            background: "#f0f4ff",
+            border: "1px solid #c7d2fe",
+            borderRadius: 10,
+          }}>
+            {pendingPreviewUrl ? (
+              <img
+                src={pendingPreviewUrl}
+                alt="preview"
+                style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, flexShrink: 0 }}
+              />
+            ) : (
+              <div style={{
+                width: 48,
+                height: 48,
+                background: "#e0e7ff",
+                borderRadius: 6,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 22,
+              }}>
+                {pendingFile.type.startsWith("audio/") ? "🎵"
+                  : pendingFile.type.startsWith("video/") ? "🎥"
+                  : "📄"}
+              </div>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#1e40af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {pendingFile.name}
+              </div>
+              <div style={{ fontSize: 11, color: "#6b7280" }}>
+                {(pendingFile.size / 1024).toFixed(0)} KB · {pendingFile.type || "archivo"}
+              </div>
+            </div>
+            <button
+              onClick={clearPendingFile}
+              title="Quitar archivo"
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#6b7280", flexShrink: 0, padding: "2px 4px" }}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         <div style={{
           border: `1.5px solid ${isInternal ? "#f59e0b" : "#e5e7eb"}`,
           borderRadius: 12,
@@ -1060,7 +1154,13 @@ function ChatPanel({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isInternal ? "Escribe una nota interna (no visible para el contacto)…" : "Escribe un mensaje…"}
+            placeholder={
+              pendingFile
+                ? "Caption opcional (Enter para enviar)…"
+                : isInternal
+                ? "Escribe una nota interna (no visible para el contacto)…"
+                : "Escribe un mensaje…"
+            }
             rows={3}
             style={{
               width: "100%",
@@ -1085,29 +1185,63 @@ function ChatPanel({
             padding: "6px 10px 8px",
             borderTop: `1px solid ${isInternal ? "#fde68a" : "#f3f4f6"}`,
           }}>
-            <button
-              onClick={() => { setShowCanned((v) => !v); setCannedSearch("") }}
-              title="Respuestas predefinidas"
-              style={{
-                background: showCanned ? "#f3f4f6" : "transparent",
-                border: "1px solid #e5e7eb",
-                borderRadius: 7,
-                padding: "5px 10px",
-                cursor: "pointer",
-                fontSize: 13,
-                color: "#6b7280",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-              }}
-            >
-              <span>⚡</span>
-              <span style={{ fontSize: 12 }}>Respuestas rápidas</span>
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* Botón adjuntar archivo */}
+              {!isInternal && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip"
+                    style={{ display: "none" }}
+                    onChange={handleFileSelect}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Adjuntar archivo"
+                    style={{
+                      background: pendingFile ? "#eff6ff" : "transparent",
+                      border: `1px solid ${pendingFile ? "#bfdbfe" : "#e5e7eb"}`,
+                      borderRadius: 7,
+                      padding: "5px 8px",
+                      cursor: "pointer",
+                      color: pendingFile ? "#2563eb" : "#6b7280",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={() => { setShowCanned((v) => !v); setCannedSearch("") }}
+                title="Respuestas predefinidas"
+                style={{
+                  background: showCanned ? "#f3f4f6" : "transparent",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 7,
+                  padding: "5px 10px",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  color: "#6b7280",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                }}
+              >
+                <span>⚡</span>
+                <span style={{ fontSize: 12 }}>Respuestas rápidas</span>
+              </button>
+            </div>
 
             <button
               onClick={sendMessage}
-              disabled={inputText.trim() === ""}
+              disabled={inputText.trim() === "" && !pendingFile}
               title="Enviar (Enter)"
               style={{
                 display: "inline-flex",
@@ -1116,15 +1250,15 @@ function ChatPanel({
                 padding: "6px 14px",
                 borderRadius: 8,
                 border: "none",
-                background: inputText.trim() ? (isInternal ? "#f59e0b" : "#2563eb") : "#e5e7eb",
-                color: inputText.trim() ? "white" : "#9ca3af",
+                background: (inputText.trim() || pendingFile) ? (isInternal ? "#f59e0b" : "#2563eb") : "#e5e7eb",
+                color: (inputText.trim() || pendingFile) ? "white" : "#9ca3af",
                 fontSize: 12,
                 fontWeight: 600,
-                cursor: inputText.trim() ? "pointer" : "default",
+                cursor: (inputText.trim() || pendingFile) ? "pointer" : "default",
                 transition: "background 150ms",
               }}
             >
-              {isInternal ? "Guardar nota" : "Enviar"}
+              {pendingFile ? "Enviar archivo" : isInternal ? "Guardar nota" : "Enviar"}
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -1182,6 +1316,7 @@ function MessageBubble({
   const isAgent = message.sender === "agent"
   const isNote = message.isInternal
   const isTemplate = message.type === "template"
+  const isMediaType = ["image", "sticker", "audio", "video", "document"].includes(message.type)
 
   const agent = isAgent ? orgMembers.find((a) => a.id === message.agentId) : null
 
@@ -1288,6 +1423,89 @@ function MessageBubble({
               {message.templateRendered ?? message.text ?? message.templateName}
             </div>
           </div>
+
+        ) : isMediaType ? (
+          /* ── Mensajes con archivos ── */
+          <div
+            title={new Date(message.timestamp).toLocaleString("es-CL")}
+            style={{ borderRadius: bubbleRadius, overflow: "hidden", boxShadow: "0 1px 2px rgba(0,0,0,0.06)", maxWidth: 300 }}
+          >
+            {(message.type === "image" || message.type === "sticker") ? (
+              message.mediaUrl ? (
+                <>
+                  <img
+                    src={resolveMediaUrl(message.mediaUrl)}
+                    alt={message.text || "Imagen"}
+                    style={{ display: "block", width: "100%", maxWidth: 280, maxHeight: 280, objectFit: "cover", cursor: "zoom-in" }}
+                    onClick={() => window.open(resolveMediaUrl(message.mediaUrl!), "_blank")}
+                  />
+                  {message.text && (
+                    <div style={{ background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb", color: isAgent ? "white" : "#111827", padding: "6px 10px", fontSize: 12, lineHeight: 1.4 }}>
+                      {message.text}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{ background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb", color: isAgent ? "white" : "#111827", padding: "9px 13px", fontSize: 13 }}>
+                  🖼️ Imagen
+                </div>
+              )
+            ) : message.type === "audio" ? (
+              <div style={{ background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb", padding: "10px 12px" }}>
+                {message.mediaUrl ? (
+                  <audio
+                    controls
+                    src={resolveMediaUrl(message.mediaUrl)}
+                    style={{ display: "block", maxWidth: 240, height: 36 }}
+                  />
+                ) : (
+                  <span style={{ fontSize: 13, color: isAgent ? "white" : "#111827" }}>🎵 Audio</span>
+                )}
+              </div>
+            ) : message.type === "video" ? (
+              message.mediaUrl ? (
+                <>
+                  <video
+                    controls
+                    src={resolveMediaUrl(message.mediaUrl)}
+                    style={{ display: "block", width: "100%", maxWidth: 280, maxHeight: 200 }}
+                  />
+                  {message.text && (
+                    <div style={{ background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb", color: isAgent ? "white" : "#111827", padding: "6px 10px", fontSize: 12 }}>
+                      {message.text}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{ background: isContact ? "white" : isBot ? "#e0e7ff" : "#2563eb", color: isAgent ? "white" : "#111827", padding: "9px 13px", fontSize: 13 }}>
+                  🎥 Video
+                </div>
+              )
+            ) : (
+              /* document */
+              <div style={{ background: isContact ? "white" : isBot ? "#e0e7ff" : "#1d4ed8", padding: "10px 13px" }}>
+                {message.mediaUrl ? (
+                  <a
+                    href={resolveMediaUrl(message.mediaUrl)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none" }}
+                  >
+                    <span style={{ fontSize: 22, flexShrink: 0 }}>📄</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: isAgent ? "white" : "#1e40af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {message.fileName || message.text || "Documento"}
+                    </span>
+                  </a>
+                ) : (
+                  <span style={{ fontSize: 13, color: isAgent ? "white" : "#111827" }}>📄 {message.fileName || "Documento"}</span>
+                )}
+                {message.text && message.text !== message.fileName && (
+                  <div style={{ fontSize: 12, color: isAgent ? "#bfdbfe" : "#6b7280", marginTop: 4 }}>{message.text}</div>
+                )}
+              </div>
+            )}
+          </div>
+
         ) : (
           <div
             title={new Date(message.timestamp).toLocaleString("es-CL")}
@@ -1558,6 +1776,7 @@ export default function SoportePage() {
     loadMessages,
     markAsRead,
     sendMessage,
+    sendMediaMessage,
     updateConversation,
     searchConversations,
     loadMore,
@@ -1601,6 +1820,11 @@ export default function SoportePage() {
   async function handleSendMessage(text: string, isInternal: boolean) {
     if (!activeConvId) return false
     return sendMessage(activeConvId, text, isInternal, "Agente")
+  }
+
+  async function handleSendMedia(file: File, caption: string) {
+    if (!activeConvId) return false
+    return sendMediaMessage(activeConvId, file, "Agente", caption || undefined)
   }
 
   async function handleDeleteConversation(id: string) {
@@ -1673,6 +1897,7 @@ export default function SoportePage() {
             messages={activeMessages}
             onUpdateConversation={handleUpdateConversation}
             onSendMessage={handleSendMessage}
+            onSendMedia={handleSendMedia}
             showContactPanel={showContactPanel}
             onToggleContactPanel={() => setShowContactPanel((v) => !v)}
             stages={stages}

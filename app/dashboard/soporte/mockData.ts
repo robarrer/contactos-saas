@@ -1,6 +1,6 @@
 export type Channel = "whatsapp" | "instagram" | "facebook" | "webchat"
 export type PipelineStage = "Nuevo contacto" | "Cita agendada" | "Cerrado"
-export type MessageType = "text" | "image" | "document" | "template"
+export type MessageType = "text" | "image" | "document" | "audio" | "video" | "sticker" | "template"
 export type MessageSender = "contact" | "agent" | "bot"
 export type BotStatus = "bot" | "human"
 
@@ -39,7 +39,8 @@ export type Message = {
   templateName?: string        // nombre de la plantilla si type === "template"
   templateRendered?: string    // texto ya renderizado con variables sustituidas
   fileName?: string
-  imageUrl?: string
+  mediaUrl?: string            // "media:<id>" para medios de WA, o blob URL para optimistic
+  mediaMime?: string
   isInternal: boolean
   timestamp: string
 }

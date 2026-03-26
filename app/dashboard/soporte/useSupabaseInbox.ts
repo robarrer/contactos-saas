@@ -32,6 +32,7 @@ type DbMessage = {
   content_type: string
   content: string | null
   media_url: string | null
+  media_mime: string | null
   is_internal: boolean
   wa_message_id: string | null
   status: string
@@ -67,6 +68,13 @@ function mapConversation(db: DbConversation): Conversation {
   }
 }
 
+function mimeToMediaType(mime: string): "image" | "audio" | "video" | "document" {
+  if (mime.startsWith("image/")) return "image"
+  if (mime.startsWith("audio/")) return "audio"
+  if (mime.startsWith("video/")) return "video"
+  return "document"
+}
+
 function mapMessage(db: DbMessage): Message {
   const senderMap: Record<string, Message["sender"]> = {
     contact: "contact",
@@ -74,12 +82,10 @@ function mapMessage(db: DbMessage): Message {
     bot:     "bot",
     system:  "bot",
   }
-  // Para mensajes de plantilla, content_type = "template"
-  // content guarda el texto renderizado, y sender_name puede tener el nombre de la plantilla prefijado
+
   let templateName: string | undefined
   let templateRendered: string | undefined
   if (db.content_type === "template") {
-    // Intentamos extraer el nombre de plantilla del campo sender_name con formato "template:nombre"
     if (db.sender_name?.startsWith("template:")) {
       templateName = db.sender_name.replace("template:", "")
     } else {
@@ -87,6 +93,10 @@ function mapMessage(db: DbMessage): Message {
     }
     templateRendered = db.content ?? undefined
   }
+
+  const mediaTypes = ["image", "audio", "video", "document", "sticker"]
+  const isMedia = mediaTypes.includes(db.content_type)
+
   return {
     id:               db.id,
     conversationId:   db.conversation_id,
@@ -95,6 +105,11 @@ function mapMessage(db: DbMessage): Message {
     text:             db.content ?? undefined,
     templateName,
     templateRendered,
+    mediaUrl:         db.media_url ?? undefined,
+    mediaMime:        db.media_mime ?? undefined,
+    fileName:         isMedia && db.media_mime
+                        ? undefined
+                        : undefined,
     isInternal:       db.is_internal,
     timestamp:        db.created_at,
   }
@@ -376,6 +391,110 @@ export function useSupabaseInbox() {
     return true
   }, [])
 
+  // ── Enviar mensaje con archivo (imagen, documento, audio, video) ─────────
+  const sendMediaMessage = useCallback(async (
+    conversationId: string,
+    file: File,
+    agentName: string,
+    caption?: string,
+  ) => {
+    const mediaType = mimeToMediaType(file.type)
+    const optimisticId = `opt-${Date.now()}`
+    const now = new Date().toISOString()
+    const localUrl = URL.createObjectURL(file)
+
+    const optimistic: Message = {
+      id:             optimisticId,
+      conversationId,
+      sender:         "agent",
+      type:           mediaType,
+      text:           caption || undefined,
+      mediaUrl:       localUrl,
+      mediaMime:      file.type,
+      fileName:       file.name,
+      isInternal:     false,
+      timestamp:      now,
+    }
+    setMessages((prev) => [...prev, optimistic])
+
+    // 1. Subir archivo a WhatsApp y enviar mensaje
+    let mediaId: string | null = null
+    const waId = waMapRef.current[conversationId]
+    if (waId) {
+      const phone = waId.startsWith("+") ? waId : `+${waId}`
+      const form = new FormData()
+      form.append("file", file, file.name)
+      form.append("phone", phone)
+      form.append("mediaType", mediaType)
+      if (caption) form.append("caption", caption)
+      try {
+        const res = await fetch("/API/send-media-whatsapp", { method: "POST", body: form })
+        if (res.ok) {
+          const data = await res.json()
+          mediaId = data.media_id ?? null
+        } else {
+          const err = await res.json().catch(() => ({}))
+          console.error("[inbox] Error enviando media WA:", err)
+        }
+      } catch (e) {
+        console.error("[inbox] Error de red al enviar media:", e)
+      }
+    } else {
+      console.warn("[inbox] No hay wa_contact_id para conversación:", conversationId)
+    }
+
+    // 2. Guardar en Supabase
+    const { data, error } = await supabase
+      .from("messages")
+      .insert({
+        conversation_id: conversationId,
+        direction:       "outbound",
+        sender_type:     "agent",
+        sender_name:     agentName,
+        content_type:    mediaType,
+        content:         caption || null,
+        media_url:       mediaId ? `media:${mediaId}` : null,
+        media_mime:      file.type,
+        is_internal:     false,
+        status:          "sent",
+      })
+      .select()
+      .single()
+
+    if (error) {
+      console.error("[inbox] Error guardando mensaje de media:", error.message)
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticId))
+      URL.revokeObjectURL(localUrl)
+      return false
+    }
+
+    // Reemplazar optimista con el real, manteniendo la URL local para visualización
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === optimisticId
+          ? { ...mapMessage(data as DbMessage), mediaUrl: localUrl, fileName: file.name }
+          : m
+      )
+    )
+
+    const lastMsg = caption || `📎 ${file.name}`
+    await supabase
+      .from("conversations")
+      .update({ last_message: lastMsg, last_activity: now })
+      .eq("id", conversationId)
+
+    setConversations((prev) => {
+      const updated = prev.map((c) =>
+        c.id === conversationId ? { ...c, lastMessage: lastMsg, lastActivityAt: now } : c
+      )
+      return updated.sort(
+        (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
+      )
+    })
+
+    return true
+  }, [])
+
   // ── Actualizar conversación (etapa, agente, modo, tags) ──────────────────
   const updateConversation = useCallback(async (
     conversationId: string,
@@ -469,6 +588,7 @@ export function useSupabaseInbox() {
     loadMessages,
     markAsRead,
     sendMessage,
+    sendMediaMessage,
     updateConversation,
     searchConversations,
     loadMore,
