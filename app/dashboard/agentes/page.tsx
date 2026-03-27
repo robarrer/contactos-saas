@@ -1204,6 +1204,19 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
         })
       : csvRows
 
+    // Subir las filas directamente a Supabase Storage para evitar el límite de 4.5 MB
+    // de Vercel en el body de funciones serverless. El API route las descarga desde Storage.
+    const storagePath = `${agentId}/${Date.now()}.json`
+    const blob = new Blob([JSON.stringify(rowsToSave)], { type: "application/json" })
+    const { error: uploadError } = await supabase.storage
+      .from("csv-uploads")
+      .upload(storagePath, blob)
+    if (uploadError) {
+      alert("Error subiendo datos CSV: " + uploadError.message)
+      setSavingKb(false)
+      return
+    }
+
     const res = await fetch("/API/agent-csv-knowledge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1213,12 +1226,14 @@ function KnowledgeBaseTab({ agentId }: { agentId: string }) {
         mode:          csvMode,
         search_column: csvMode === "exact" ? searchColumn : (searchColumn || null),
         headers:       csvHeaders,
-        rows:          rowsToSave,
         row_count:     rowsToSave.length,
+        storage_path:  storagePath,
       }),
     })
     const json = await res.json()
     if (!res.ok) {
+      // Limpiar el archivo temporal si el API falla
+      await supabase.storage.from("csv-uploads").remove([storagePath])
       alert("Error guardando base de conocimiento: " + json.error)
       setSavingKb(false)
       return

@@ -50,11 +50,11 @@ export async function POST(request) {
   if (!user) return Response.json({ error: "No autenticado" }, { status: 401 })
 
   const body = await request.json()
-  const { agent_id, name, mode, search_column, headers, rows, row_count } = body
+  const { agent_id, name, mode, search_column, headers, row_count, storage_path } = body
 
   // En modo 'catalog' search_column es opcional; en 'exact' es requerido
   const effectiveMode = mode === "catalog" ? "catalog" : "exact"
-  if (!agent_id || !name) {
+  if (!agent_id || !name || !storage_path) {
     return Response.json({ error: "Faltan campos requeridos" }, { status: 400 })
   }
   if (effectiveMode === "exact" && !search_column) {
@@ -72,13 +72,33 @@ export async function POST(request) {
     return Response.json({ error: "Agente no encontrado o sin permisos" }, { status: 403 })
   }
 
-  // Insertar usando service role para bypassear la RLS rota de agent_csv_knowledge
+  // Las filas viajan directamente del browser a Supabase Storage para evitar el límite
+  // de 4.5 MB de Vercel. Aquí las descargamos con service role y las insertamos en DB.
   const supabase = getServiceClient()
+  const { data: fileBlob, error: downloadError } = await supabase.storage
+    .from("csv-uploads")
+    .download(storage_path)
+
+  if (downloadError) {
+    return Response.json({ error: "Error descargando datos temporales: " + downloadError.message }, { status: 500 })
+  }
+
+  let rows
+  try {
+    rows = JSON.parse(await fileBlob.text())
+  } catch {
+    await supabase.storage.from("csv-uploads").remove([storage_path])
+    return Response.json({ error: "Formato de datos inválido" }, { status: 400 })
+  }
+
   const { data, error } = await supabase
     .from("agent_csv_knowledge")
     .insert({ agent_id, name, mode: effectiveMode, search_column: search_column || null, headers, rows, row_count })
     .select()
     .single()
+
+  // Limpiar archivo temporal independientemente del resultado
+  await supabase.storage.from("csv-uploads").remove([storage_path])
 
   if (error) return Response.json({ error: error.message }, { status: 500 })
 
