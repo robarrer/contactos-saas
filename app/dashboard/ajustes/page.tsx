@@ -684,6 +684,10 @@ type OrgData = {
   has_token:        boolean
   has_verify_token: boolean
   has_app_secret:   boolean
+  openai_api_key:    string
+  anthropic_api_key: string
+  has_openai_key:    boolean
+  has_anthropic_key: boolean
 }
 
 const EMPTY_ORG_FORM = {
@@ -692,6 +696,8 @@ const EMPTY_ORG_FORM = {
   whatsapp_business_account_id: "",
   whatsapp_verify_token:        "",
   whatsapp_app_secret:          "",
+  openai_api_key:               "",
+  anthropic_api_key:            "",
 }
 
 function OrganizacionTab() {
@@ -826,8 +832,8 @@ function OrganizacionTab() {
         </div>
       </div>
 
-      {/* Formulario credenciales */}
-      <div style={{ background: "white", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden" }}>
+      {/* Formulario credenciales WhatsApp */}
+      <div style={{ background: "white", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", marginBottom: 20 }}>
         <div style={{ padding: "14px 20px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
@@ -896,6 +902,155 @@ function OrganizacionTab() {
           </div>
         </form>
       </div>
+
+      {/* Credenciales de IA */}
+      <AIKeysSection
+        current={current}
+        showFields={showFields}
+        toggleShow={toggleShow}
+        form={form}
+        setForm={setForm}
+        saving={saving}
+        saved={saved}
+        error={error}
+        handleSave={handleSave}
+      />
+    </div>
+  )
+}
+
+// ─── Sección Credenciales de IA ───────────────────────────────────────────────
+
+function AIKeysSection({
+  current,
+  showFields,
+  toggleShow,
+  form,
+  setForm,
+  saving,
+  saved,
+  error,
+  handleSave,
+}: {
+  current: OrgData | null
+  showFields: Record<string, boolean>
+  toggleShow: (k: string) => void
+  form: typeof EMPTY_ORG_FORM
+  setForm: React.Dispatch<React.SetStateAction<typeof EMPTY_ORG_FORM>>
+  saving: boolean
+  saved: boolean
+  error: string | null
+  handleSave: (e: React.FormEvent) => void
+}) {
+  const aiFields: { key: keyof typeof EMPTY_ORG_FORM; label: string; placeholder: string; help: string; badge: string; badgeColor: string }[] = [
+    {
+      key:         "openai_api_key",
+      label:       "OpenAI API Key",
+      placeholder: current?.has_openai_key ? "Dejar vacío para no cambiar" : "sk-proj-…",
+      help:        "platform.openai.com/account/api-keys — Necesaria si algún agente usa GPT-4o u otro modelo OpenAI.",
+      badge:       "OpenAI",
+      badgeColor:  "#10a37f",
+    },
+    {
+      key:         "anthropic_api_key",
+      label:       "Anthropic API Key",
+      placeholder: current?.has_anthropic_key ? "Dejar vacío para no cambiar" : "sk-ant-…",
+      help:        "console.anthropic.com/settings/keys — Necesaria si algún agente usa Claude.",
+      badge:       "Anthropic",
+      badgeColor:  "#c96442",
+    },
+  ]
+
+  return (
+    <div style={{ background: "white", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden" }}>
+      <div style={{ padding: "14px 20px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10a37f" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 2a5 5 0 0 1 5 5v2h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h1V7a5 5 0 0 1 5-5z"/>
+          <circle cx="12" cy="16" r="1.5" fill="#10a37f"/>
+        </svg>
+        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Credenciales de IA</h2>
+        <span style={{ fontSize: 12, color: "#6b7280", background: "#f3f4f6", padding: "2px 8px", borderRadius: 10 }}>
+          Sobreescriben las variables de entorno del proyecto
+        </span>
+      </div>
+
+      <form onSubmit={handleSave}>
+        <div style={{ padding: "20px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+
+          <div style={{ display: "flex", gap: 8, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "9px 12px", fontSize: 12, color: "#92400e" }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>Si esta organización tiene su propia key configurada aquí, se usará en lugar de la key global del proyecto. Si los campos están vacíos, se usa el fallback del entorno.</span>
+          </div>
+
+          {aiFields.map((f) => (
+            <label key={f.key} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{f.label}</span>
+                <span style={{
+                  fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 10,
+                  background: f.badgeColor + "18", color: f.badgeColor,
+                }}>
+                  {f.badge}
+                </span>
+                {(f.key === "openai_api_key" ? current?.has_openai_key : current?.has_anthropic_key) && (
+                  <span style={{ fontSize: 11, color: "#16a34a", background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "1px 7px", borderRadius: 10, fontWeight: 600 }}>
+                    ✓ Configurada
+                  </span>
+                )}
+              </div>
+              <div style={{ position: "relative" }}>
+                <input
+                  type={!showFields[f.key] ? "password" : "text"}
+                  value={form[f.key]}
+                  onChange={(e) => setForm((p) => ({ ...p, [f.key]: e.target.value }))}
+                  placeholder={f.placeholder}
+                  autoComplete="off"
+                  style={{ ...inputStyle, paddingRight: 40, fontFamily: "monospace" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => toggleShow(f.key)}
+                  title={showFields[f.key] ? "Ocultar" : "Mostrar"}
+                  style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#9ca3af", padding: 2, display: "flex", alignItems: "center" }}
+                >
+                  {showFields[f.key] ? (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                  ) : (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  )}
+                </button>
+              </div>
+              <span style={{ fontSize: 11, color: "#9ca3af", lineHeight: 1.4 }}>{f.help}</span>
+            </label>
+          ))}
+
+          {error && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "9px 12px", fontSize: 13, color: "#dc2626" }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 4, borderTop: "1px solid #f3f4f6" }}>
+            <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", flex: 1 }}>
+              Solo se actualizan los campos que completes. Los campos vacíos mantienen su valor actual.
+            </p>
+            <button
+              type="submit"
+              disabled={saving}
+              style={{ flexShrink: 0, padding: "8px 20px", fontSize: 13, fontWeight: 600, borderRadius: 8, border: "none", background: saving ? "#9ca3af" : "#111827", color: "white", cursor: saving ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6 }}
+            >
+              {saving ? (
+                "Guardando…"
+              ) : saved ? (
+                <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg> Guardado</>
+              ) : (
+                "Guardar cambios"
+              )}
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
   )
 }

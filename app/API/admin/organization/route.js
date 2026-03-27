@@ -36,7 +36,7 @@ export async function GET() {
   const supabase = getServiceClient()
   const { data: org, error } = await supabase
     .from("organizations")
-    .select("whatsapp_token, whatsapp_phone_number_id, whatsapp_business_account_id, whatsapp_verify_token, whatsapp_app_secret")
+    .select("whatsapp_token, whatsapp_phone_number_id, whatsapp_business_account_id, whatsapp_verify_token, whatsapp_app_secret, openai_api_key, anthropic_api_key")
     .eq("id", orgId)
     .maybeSingle()
 
@@ -53,6 +53,10 @@ export async function GET() {
       has_token:        !!org.whatsapp_token,
       has_verify_token: !!org.whatsapp_verify_token,
       has_app_secret:   !!org.whatsapp_app_secret,
+      openai_api_key:   mask(org.openai_api_key),
+      anthropic_api_key: mask(org.anthropic_api_key),
+      has_openai_key:   !!org.openai_api_key,
+      has_anthropic_key: !!org.anthropic_api_key,
     },
   })
 }
@@ -72,6 +76,8 @@ export async function PUT(req) {
     "whatsapp_business_account_id",
     "whatsapp_verify_token",
     "whatsapp_app_secret",
+    "openai_api_key",
+    "anthropic_api_key",
   ]
 
   const updates = {}
