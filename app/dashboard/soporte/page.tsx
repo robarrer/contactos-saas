@@ -627,6 +627,7 @@ function ChatPanel({
   stages,
   orgMembers,
   currentUserId,
+  orgId,
 }: {
   conversation: Conversation
   contact: MockContact
