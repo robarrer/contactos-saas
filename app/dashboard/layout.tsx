@@ -139,7 +139,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           }}
         >
           {!collapsed && (
-            <img src="/logo-kueri.png" alt="Kueri" style={{ height: 26, width: "auto" }} />
+            <img src="/logo-barra.png" alt="Kueri" style={{ height: 28, width: "auto" }} />
           )}
           <button
             type="button"

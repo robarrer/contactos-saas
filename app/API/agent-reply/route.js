@@ -331,16 +331,16 @@ export async function POST(req) {
   }
 
   // 4. Buscar agente asignado a la etapa
-  // Nota: pipeline_stages no almacena organization_id, se busca solo por nombre.
   let agent = null
   if (conv.pipeline_stage) {
-    const { data: stageRow } = await supabase
+    let stageQuery = supabase
       .from("pipeline_stages")
       .select("agent_id")
       .eq("name", conv.pipeline_stage)
       .order("position", { ascending: true })
       .limit(1)
-      .maybeSingle()
+    if (orgId) stageQuery = stageQuery.eq("organization_id", orgId)
+    const { data: stageRow } = await stageQuery.maybeSingle()
 
     console.log(`[agent-reply] stage="${conv.pipeline_stage}" → agent_id=${stageRow?.agent_id ?? "ninguno"}`)
 

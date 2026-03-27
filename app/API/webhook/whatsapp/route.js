@@ -217,19 +217,20 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
-  if (orgId) convQuery.eq("organization_id", orgId)
+  if (orgId) convQuery = convQuery.eq("organization_id", orgId)
 
   let { data: conversation } = await convQuery.maybeSingle()
 
   if (!conversation) {
     // Obtener la primera etapa del embudo
     let defaultStage = "Nuevo contacto"
-    const { data: firstStage, error: stageError } = await supabase
+    let stageQuery = supabase
       .from("pipeline_stages")
       .select("name")
       .order("position", { ascending: true })
       .limit(1)
-      .maybeSingle()
+    if (orgId) stageQuery = stageQuery.eq("organization_id", orgId)
+    const { data: firstStage, error: stageError } = await stageQuery.maybeSingle()
     console.log("[webhook] pipeline_stages query:", { firstStage, stageError, orgId })
     if (firstStage?.name) defaultStage = firstStage.name
     console.log("[webhook] defaultStage resuelto:", defaultStage)

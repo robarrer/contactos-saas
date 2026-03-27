@@ -892,27 +892,41 @@ function useEmbudoData() {
   const [stages, setStages]               = useState<StageConfig[]>(DEFAULT_STAGES)
   const [aiAgents, setAiAgents]           = useState<DbAgent[]>([])
   const [loading, setLoading]             = useState(true)
+  const [orgId, setOrgId]                 = useState<string | null>(null)
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
+        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
+    })
+  }, [])
 
   const loadStages = useCallback(async () => {
+    if (!orgId) return
     const { data } = await supabase
       .from("pipeline_stages")
       .select("id, name, color, agent_id, position")
+      .eq("organization_id", orgId)
       .order("position", { ascending: true })
     if (data && data.length > 0) {
       setStages(data.map((s) => ({ id: s.id, name: s.name, color: s.color ?? "#6b7280", agent_id: s.agent_id ?? null })))
     }
-  }, [])
+  }, [orgId])
 
   const loadAgents = useCallback(async () => {
-    const { data } = await supabase.from("agents").select("id, name, active").eq("active", true).order("created_at")
+    if (!orgId) return
+    const { data } = await supabase.from("agents").select("id, name, active").eq("organization_id", orgId).eq("active", true).order("created_at")
     setAiAgents(data ?? [])
-  }, [])
+  }, [orgId])
 
   const load = useCallback(async () => {
+    if (!orgId) return
     const { data, error } = await supabase
       .from("conversations")
       .select("*, contacts(id, first_name, last_name, phone, email, company, status, created_at)")
       .eq("status", "open")
+      .eq("organization_id", orgId)
       .order("last_activity", { ascending: false })
 
     if (error) { console.error("[embudo]", error.message); return }
@@ -944,15 +958,17 @@ function useEmbudoData() {
     setConversations(convs)
     setContacts(ctcts)
     setLoading(false)
-  }, [])
+  }, [orgId])
 
   async function saveStages(newStages: StageConfig[]) {
+    if (!orgId) return
     const rows = newStages.map((s, i) => ({
-      id:       s.id,
-      name:     s.name,
-      color:    s.color,
-      agent_id: s.agent_id ?? null,
-      position: i,
+      id:              s.id,
+      name:            s.name,
+      color:           s.color,
+      agent_id:        s.agent_id ?? null,
+      position:        i,
+      organization_id: orgId,
     }))
 
     const { error: upsertError } = await supabase
@@ -977,6 +993,7 @@ function useEmbudoData() {
         .from("conversations")
         .update({ pipeline_stage: renamed.name })
         .eq("pipeline_stage", oldName)
+        .eq("organization_id", orgId)
     }
 
     // Actualizar estado local de conversaciones con los nuevos nombres
@@ -1026,6 +1043,7 @@ function useEmbudoData() {
   }
 
   useEffect(() => {
+    if (!orgId) return
     load()
     loadStages()
     loadAgents()
@@ -1033,7 +1051,7 @@ function useEmbudoData() {
       .on("postgres_changes", { event: "*", schema: "public", table: "conversations" }, load)
       .subscribe()
     return () => { supabase.removeChannel(ch) }
-  }, [load, loadStages, loadAgents])
+  }, [load, loadStages, loadAgents, orgId])
 
   return { conversations, contacts, stages, aiAgents, loading, updateConversation, setConversations, saveStages }
 }

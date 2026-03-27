@@ -104,16 +104,27 @@ function RespuestasTab() {
   const [form, setForm]           = useState(EMPTY_CR)
   const [saving, setSaving]       = useState(false)
   const [deleteId, setDeleteId]   = useState<string | null>(null)
+  const [orgId, setOrgId]         = useState<string | null>(null)
   const titleRef = useRef<HTMLInputElement>(null)
 
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
+        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
+    })
+  }, [])
+
   async function load() {
+    if (!orgId) return
     setLoading(true)
-    const { data } = await supabase.from("canned_responses").select("*").order("category").order("title")
+    const { data } = await supabase.from("canned_responses").select("*").eq("organization_id", orgId).order("category").order("title")
     setItems(data ?? [])
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [orgId])
   useEffect(() => { if (showForm) setTimeout(() => titleRef.current?.focus(), 50) }, [showForm])
   useEffect(() => {
     if (!showForm && !deleteId) return
@@ -130,7 +141,7 @@ function RespuestasTab() {
     setSaving(true)
     const data = { category: form.category.trim() || "General", title: form.title.trim(), content: form.content.trim() }
     if (editingId) await supabase.from("canned_responses").update(data).eq("id", editingId)
-    else           await supabase.from("canned_responses").insert(data)
+    else           await supabase.from("canned_responses").insert({ ...data, organization_id: orgId })
     setSaving(false); setShowForm(false); load()
   }
 
@@ -286,10 +297,20 @@ function BotTab() {
   const [loading, setLoading]   = useState(true)
   const [saving, setSaving]     = useState<SettingKey | null>(null)
   const [saved, setSaved]       = useState<SettingKey | null>(null)
+  const [orgId, setOrgId]       = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    supabase.from("settings").select("key, value").then(({ data }) => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
+        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!orgId) return
+    supabase.from("settings").select("key, value").eq("organization_id", orgId).then(({ data }) => {
       if (data) {
         const map: Partial<Settings> = {}
         for (const row of data) {
@@ -299,12 +320,13 @@ function BotTab() {
       }
       setLoading(false)
     })
-  }, [])
+  }, [orgId])
 
   async function saveSetting(key: SettingKey, value: number) {
+    if (!orgId) return
     if (timerRef.current) clearTimeout(timerRef.current)
     setSaving(key)
-    await supabase.from("settings").upsert({ key, value: String(value) }, { onConflict: "key" })
+    await supabase.from("settings").upsert({ key, value: String(value), organization_id: orgId }, { onConflict: "key,organization_id" })
     setSaving(null); setSaved(key)
     timerRef.current = setTimeout(() => setSaved(null), 2000)
   }

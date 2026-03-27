@@ -639,6 +639,7 @@ function ChatPanel({
   stages: string[]
   orgMembers: Agent[]
   currentUserId: string | null
+  orgId: string | null
 }) {
   const [inputText, setInputText] = useState("")
   const [isInternal, setIsInternal] = useState(false)
@@ -654,13 +655,15 @@ function ChatPanel({
 
   // Cargar respuestas prediseñadas desde Supabase
   useEffect(() => {
+    if (!orgId) return
     supabase
       .from("canned_responses")
       .select("id, category, title, content")
+      .eq("organization_id", orgId)
       .order("category")
       .order("title")
       .then(({ data }) => setCannedResponses(data ?? []))
-  }, [])
+  }, [orgId])
 
   useEffect(() => {
     setLocalMessages(messages)
@@ -1772,6 +1775,7 @@ export default function SoportePage() {
     loading,
     loadingMore,
     hasMore,
+    orgId,
     activeConvIdRef,
     loadMessages,
     markAsRead,
@@ -1790,16 +1794,18 @@ export default function SoportePage() {
   const [stages, setStages] = useState<string[]>(PIPELINE_STAGES)
 
   useEffect(() => {
+    if (!orgId) return
     supabase
       .from("pipeline_stages")
       .select("name")
+      .eq("organization_id", orgId)
       .order("position", { ascending: true })
       .then(({ data }) => {
         if (data && data.length > 0) {
           setStages(data.map((s) => s.name))
         }
       })
-  }, [])
+  }, [orgId])
 
   async function handleSelectConversation(id: string) {
     setActiveConvId(id)
@@ -1903,6 +1909,7 @@ export default function SoportePage() {
             stages={stages}
             orgMembers={orgMembers}
             currentUserId={currentUserId}
+            orgId={orgId}
           />
         ) : (
           <div

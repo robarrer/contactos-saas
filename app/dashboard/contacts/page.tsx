@@ -107,14 +107,15 @@ export default function ContactsPage() {
   }, [])
 
   async function loadContacts() {
+    if (!orgId) return
     setLoading(true)
-    const { data, error } = await supabase.from("contacts").select("*").order("created_at", { ascending: false })
+    const { data, error } = await supabase.from("contacts").select("*").eq("organization_id", orgId).order("created_at", { ascending: false })
     if (error) console.error("Error loading contacts:", error)
     else setContacts(data || [])
     setLoading(false)
   }
 
-  useEffect(() => { loadContacts() }, [])
+  useEffect(() => { loadContacts() }, [orgId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const contactKey = (c: Contact) => c.id ?? `${c.email}|${c.phone}|${c.first_name}|${c.last_name}`
 

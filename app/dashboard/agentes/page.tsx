@@ -1501,16 +1501,26 @@ export default function AgentesPage() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [saving, setSaving]               = useState(false)
   const [search, setSearch]               = useState("")
+  const [orgId, setOrgId]                 = useState<string | null>(null)
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
+        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
+    })
+  }, [])
 
   async function loadAgents() {
+    if (!orgId) return
     setLoading(true)
-    const { data, error } = await supabase.from("agents").select("*").order("created_at", { ascending: false })
+    const { data, error } = await supabase.from("agents").select("*").eq("organization_id", orgId).order("created_at", { ascending: false })
     if (error) console.error("[agentes]", error.message)
     else setAgents(data ?? [])
     setLoading(false)
   }
 
-  useEffect(() => { loadAgents() }, [])
+  useEffect(() => { loadAgents() }, [orgId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSave(form: Agent) {
     setSaving(true)
@@ -1522,7 +1532,7 @@ export default function AgentesPage() {
     }
     const { error } = form.id
       ? await supabase.from("agents").update(payload).eq("id", form.id)
-      : await supabase.from("agents").insert(payload)
+      : await supabase.from("agents").insert({ ...payload, organization_id: orgId })
     setSaving(false)
     if (error) { alert("Error guardando agente: " + error.message); return }
     setSelectedAgent(null)

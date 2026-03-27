@@ -79,13 +79,14 @@ export async function GET(request) {
     let agent = null
 
     if (conv.pipeline_stage) {
-      const { data: stageRow } = await supabase
+      let stageQuery = supabase
         .from("pipeline_stages")
         .select("agent_id")
         .eq("name", conv.pipeline_stage)
         .order("position", { ascending: true })
         .limit(1)
-        .maybeSingle()
+      if (conv.organization_id) stageQuery = stageQuery.eq("organization_id", conv.organization_id)
+      const { data: stageRow } = await stageQuery.maybeSingle()
 
       if (stageRow?.agent_id) {
         const { data: stageAgent } = await supabase

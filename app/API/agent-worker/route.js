@@ -32,11 +32,11 @@ export async function POST(req) {
   const supabase = getServiceClient()
 
   // 1. Leer tiempo de debounce desde settings de la organización
-  const settingsQuery = supabase
+  let settingsQuery = supabase
     .from("settings")
     .select("value")
     .eq("key", "message_debounce_seconds")
-  if (organization_id) settingsQuery.eq("organization_id", organization_id)
+  if (organization_id) settingsQuery = settingsQuery.eq("organization_id", organization_id)
 
   const { data: setting } = await settingsQuery.maybeSingle()
   const debounceSeconds = Math.max(0, Math.min(8, parseInt(setting?.value ?? "5", 10)))
@@ -44,11 +44,11 @@ export async function POST(req) {
   console.log(`[worker] START conv=${conversation_id} org=${organization_id} debounce=${debounceSeconds}s ts=${message_timestamp}`)
 
   // 2. Registrar este mensaje como candidato (solo si timestamp >= existente)
-  const debounceQuery = supabase
+  let debounceQuery = supabase
     .from("message_debounce")
     .select("last_message_at")
     .eq("conversation_id", conversation_id)
-  if (organization_id) debounceQuery.eq("organization_id", organization_id)
+  if (organization_id) debounceQuery = debounceQuery.eq("organization_id", organization_id)
 
   const { data: existing } = await debounceQuery.maybeSingle()
 
@@ -80,11 +80,11 @@ export async function POST(req) {
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, pollMs))
 
-      const pollQuery = supabase
+      let pollQuery = supabase
         .from("message_debounce")
         .select("last_message_at")
         .eq("conversation_id", conversation_id)
-      if (organization_id) pollQuery.eq("organization_id", organization_id)
+      if (organization_id) pollQuery = pollQuery.eq("organization_id", organization_id)
 
       const { data: current } = await pollQuery.maybeSingle()
 

@@ -55,7 +55,7 @@ export default function LoginPage() {
       >
         {/* Logo */}
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <img src="/logo-kueri.png" alt="Kueri" style={{ height: 36, width: "auto" }} />
+          <img src="/logo-login.png" alt="Kueri" style={{ height: 48, width: "auto", display: "block", margin: "0 auto" }} />
           <p style={{ margin: "10px 0 0", fontSize: 14, color: "#6b7280" }}>
             Inicia sesión en tu cuenta
           </p>

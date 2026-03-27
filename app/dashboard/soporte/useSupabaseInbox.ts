@@ -141,14 +141,24 @@ export function useSupabaseInbox() {
   const [loadingMore, setLoadingMore]     = useState(false)
   const [hasMore, setHasMore]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
+  const [orgId, setOrgId]                 = useState<string | null>(null)
 
   const activeConvIdRef = useRef<string | null>(null)
   const waMapRef        = useRef<Record<string, string>>({})
   const pageRef         = useRef(0)
   const searchRef       = useRef("")
 
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
+        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
+    })
+  }, [])
+
   // ── Cargar una página de conversaciones ──────────────────────────────────
   const loadPage = useCallback(async (search: string, page: number, replace: boolean) => {
+    if (!orgId) return
     if (page === 0) replace = true
 
     const from = page * PAGE_SIZE
@@ -159,6 +169,7 @@ export function useSupabaseInbox() {
       .from("conversations")
       .select("*, contacts(id, first_name, last_name, phone, email, company, status, created_at)")
       .eq("status", "open")
+      .eq("organization_id", orgId)
       .order("last_activity", { ascending: false })
       .range(from, to)
 
@@ -172,6 +183,7 @@ export function useSupabaseInbox() {
       const { data: matchedContacts } = await supabase
         .from("contacts")
         .select("id")
+        .eq("organization_id", orgId)
         .or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%`)
       contactIds = (matchedContacts ?? []).map((c: { id: string }) => c.id)
     }
@@ -183,6 +195,7 @@ export function useSupabaseInbox() {
         .from("conversations")
         .select("*, contacts(id, first_name, last_name, phone, email, company, status, created_at)")
         .eq("status", "open")
+        .eq("organization_id", orgId)
         .in("contact_id", contactIds)
         .order("last_activity", { ascending: false })
         .range(0, PAGE_SIZE - 1)
@@ -247,7 +260,7 @@ export function useSupabaseInbox() {
       })
       setLoadingMore(false)
     }
-  }, [])
+  }, [orgId])
 
   // ── Carga inicial ─────────────────────────────────────────────────────────
   const loadConversations = useCallback(async () => {
@@ -526,6 +539,7 @@ export function useSupabaseInbox() {
 
   // ── Realtime: nuevos mensajes y conversaciones ────────────────────────────
   useEffect(() => {
+    if (!orgId) return
     loadConversations()
 
     const msgChannel = supabase
@@ -574,7 +588,7 @@ export function useSupabaseInbox() {
       .subscribe()
 
     return () => { supabase.removeChannel(msgChannel) }
-  }, [loadConversations])
+  }, [loadConversations, orgId])
 
   return {
     conversations,
@@ -584,6 +598,7 @@ export function useSupabaseInbox() {
     loadingMore,
     hasMore,
     error,
+    orgId,
     activeConvIdRef,
     loadMessages,
     markAsRead,
