@@ -209,7 +209,7 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
   }
 
   // Buscar o crear conversación
-  const convQuery = supabase
+  let convQuery = supabase
     .from("conversations")
     .select("id, unread_count")
     .eq("contact_id", contact.id)
@@ -230,6 +230,7 @@ async function processInboundMessage(msg, waContact, metadata, orgId, supabase) 
       .order("position", { ascending: true })
       .limit(1)
     if (orgId) stageQuery = stageQuery.eq("organization_id", orgId)
+
     const { data: firstStage, error: stageError } = await stageQuery.maybeSingle()
     console.log("[webhook] pipeline_stages query:", { firstStage, stageError, orgId })
     if (firstStage?.name) defaultStage = firstStage.name
