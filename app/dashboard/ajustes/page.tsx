@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
+import { useOrgId } from "@/app/dashboard/OrgContext"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,16 +105,9 @@ function RespuestasTab() {
   const [form, setForm]           = useState(EMPTY_CR)
   const [saving, setSaving]       = useState(false)
   const [deleteId, setDeleteId]   = useState<string | null>(null)
-  const [orgId, setOrgId]         = useState<string | null>(null)
+  // orgId proviene del OrgProvider del layout; ya no se resuelve localmente.
+  const orgId = useOrgId()
   const titleRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
-        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
-    })
-  }, [])
 
   async function load() {
     if (!orgId) return
@@ -297,16 +291,9 @@ function BotTab() {
   const [loading, setLoading]   = useState(true)
   const [saving, setSaving]     = useState<SettingKey | null>(null)
   const [saved, setSaved]       = useState<SettingKey | null>(null)
-  const [orgId, setOrgId]       = useState<string | null>(null)
+  // orgId proviene del OrgProvider del layout; ya no se resuelve localmente.
+  const orgId = useOrgId()
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
-        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
-    })
-  }, [])
 
   useEffect(() => {
     if (!orgId) return

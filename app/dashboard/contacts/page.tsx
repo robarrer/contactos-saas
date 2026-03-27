@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
+import { useOrgId } from "@/app/dashboard/OrgContext"
 
 type Contact = {
   id?: string
@@ -78,13 +79,25 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
 type SortCol = "first_name" | "email" | "phone" | "company" | "status"
 type SortDir = "asc" | "desc"
 
+// Cantidad de filas por página. Subir esto implica más datos por request;
+// bajarlo mejora la velocidad inicial pero pagina antes.
+const PAGE_SIZE = 50
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
+  // debouncedSearch: se actualiza 350 ms después del último keystroke para no
+  // lanzar una query a Supabase en cada letra.
+  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [sortCol, setSortCol] = useState<SortCol>("first_name")
   const [sortDir, setSortDir] = useState<SortDir>("asc")
+  const [page, setPage] = useState(0)
+  const [totalCount, setTotalCount] = useState(0)
+  // reloadKey: incrementarlo fuerza un re-fetch sin cambiar ningún otro parámetro
+  // (usado después de insert/update/delete).
+  const [reloadKey, setReloadKey] = useState(0)
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(() => new Set())
   const selectAllRef = useRef<HTMLInputElement>(null)
   const [editingContactId, setEditingContactId] = useState<string | null>(null)
@@ -96,57 +109,86 @@ export default function ContactsPage() {
   const [sendingTemplate, setSendingTemplate] = useState<string | null>(null)
   const csvInputRef = useRef<HTMLInputElement>(null)
   const [importingCsv, setImportingCsv] = useState(false)
-  const [orgId, setOrgId] = useState<string | null>(null)
+  // orgId proviene del OrgProvider del layout; ya no se resuelve localmente.
+  const orgId = useOrgId()
 
+  // Debounce del texto de búsqueda: evita queries en cada keystroke.
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
-        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
-    })
-  }, [])
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search)
+      setPage(0)
+      setSelectedContactIds(new Set())
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [search])
 
-  async function loadContacts() {
+  // Query principal: se re-ejecuta cuando cambia cualquier parámetro de filtrado,
+  // orden, página u orgId. Todo el filtrado y ordenado ocurre en Supabase.
+  useEffect(() => {
     if (!orgId) return
-    setLoading(true)
-    const { data, error } = await supabase.from("contacts").select("*").eq("organization_id", orgId).order("created_at", { ascending: false })
-    if (error) console.error("Error loading contacts:", error)
-    else setContacts(data || [])
-    setLoading(false)
-  }
+    let cancelled = false
 
-  useEffect(() => { loadContacts() }, [orgId]) // eslint-disable-line react-hooks/exhaustive-deps
+    async function run() {
+      setLoading(true)
+      const from = page * PAGE_SIZE
+      const to   = from + PAGE_SIZE - 1
+
+      let query = supabase
+        .from("contacts")
+        .select("*", { count: "exact" })
+        .eq("organization_id", orgId)
+        .order(sortCol, { ascending: sortDir === "asc" })
+        .range(from, to)
+
+      if (debouncedSearch) {
+        // Búsqueda por nombre (ambas partes), email, teléfono y empresa.
+        query = query.or(
+          `first_name.ilike.%${debouncedSearch}%,` +
+          `last_name.ilike.%${debouncedSearch}%,` +
+          `email.ilike.%${debouncedSearch}%,` +
+          `phone.ilike.%${debouncedSearch}%,` +
+          `company.ilike.%${debouncedSearch}%`
+        )
+      }
+
+      if (statusFilter !== "all") {
+        query = query.eq("status", statusFilter)
+      }
+
+      const { data, error, count } = await query
+      if (cancelled) return
+      if (error) console.error("Error loading contacts:", error)
+      else {
+        setContacts(data ?? [])
+        setTotalCount(count ?? 0)
+      }
+      setLoading(false)
+    }
+
+    run()
+    return () => { cancelled = true }
+  }, [orgId, page, debouncedSearch, statusFilter, sortCol, sortDir, reloadKey])
+
+  // Recarga sin cambiar página (post insert/update/delete).
+  const triggerReload = useCallback(() => setReloadKey((k) => k + 1), [])
 
   const contactKey = (c: Contact) => c.id ?? `${c.email}|${c.phone}|${c.first_name}|${c.last_name}`
 
-  const allContactIds = useMemo(() => contacts.map((c) => c.id).filter(Boolean) as string[], [contacts])
-  const allSelected = allContactIds.length > 0 && allContactIds.every((id) => selectedContactIds.has(id))
-  const someSelected = allContactIds.some((id) => selectedContactIds.has(id))
+  // "Seleccionar todos" opera sobre los contactos de la página actual.
+  const allContactIds = contacts.map((c) => c.id).filter(Boolean) as string[]
+  const allSelected   = allContactIds.length > 0 && allContactIds.every((id) => selectedContactIds.has(id))
+  const someSelected  = allContactIds.some((id) => selectedContactIds.has(id))
 
   useEffect(() => {
     if (!selectAllRef.current) return
     selectAllRef.current.indeterminate = someSelected && !allSelected
   }, [someSelected, allSelected])
 
-  // Filtrado y ordenado
-  const filtered = useMemo(() => {
-    let list = contacts.filter((c) => {
-      const q = search.toLowerCase()
-      const matchSearch = !q || contactFullName(c).toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q) || c.company.toLowerCase().includes(q)
-      const matchStatus = statusFilter === "all" || c.status === statusFilter
-      return matchSearch && matchStatus
-    })
-    list = [...list].sort((a, b) => {
-      const av = (a[sortCol] ?? "").toLowerCase()
-      const bv = (b[sortCol] ?? "").toLowerCase()
-      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av)
-    })
-    return list
-  }, [contacts, search, statusFilter, sortCol, sortDir])
-
   function toggleSort(col: SortCol) {
     if (sortCol === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"))
     else { setSortCol(col); setSortDir("asc") }
+    setPage(0)
+    setSelectedContactIds(new Set())
   }
 
   function SortArrow({ col }: { col: SortCol }) {
@@ -225,7 +267,7 @@ export default function ContactsPage() {
       ? await supabase.from("contacts").update({ first_name: payload.first_name, last_name: payload.last_name, email: payload.email, phone: payload.phone, company: payload.company, status: payload.status }).eq("id", editingContactId)
       : await supabase.from("contacts").insert([{ ...payload, organization_id: orgId }])
     if (error) { alert((editingContactId ? "Error actualizando: " : "Error guardando: ") + error.message); return }
-    resetForm(); setShowForm(false); loadContacts()
+    resetForm(); setShowForm(false); triggerReload()
   }
 
   async function deleteSelected() {
@@ -235,7 +277,7 @@ export default function ContactsPage() {
     const { error } = await supabase.from("contacts").delete().in("id", ids)
     if (error) { alert("Error eliminando: " + error.message); return }
     if (editingContactId && ids.includes(editingContactId)) { resetForm(); setShowForm(false) }
-    setSelectedContactIds(new Set()); loadContacts()
+    setSelectedContactIds(new Set()); triggerReload()
   }
 
   async function openTemplatePicker() {
@@ -312,7 +354,7 @@ export default function ContactsPage() {
     setImportingCsv(false)
     if (error) { alert("Error importando: " + error.message); return }
     alert(`Se importaron/actualizaron ${parsed.length} contacto(s).${skipped.length ? `\n${skipped.length} omitidas.` : ""}`)
-    loadContacts()
+    triggerReload()
   }
 
   useEffect(() => {
@@ -333,7 +375,7 @@ export default function ContactsPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Contactos</h1>
             <span style={{ fontSize: 12, background: "#f3f4f6", color: "#6b7280", padding: "2px 8px", borderRadius: 12, fontWeight: 500 }}>
-              {filtered.length} contactos
+              {totalCount} contactos
             </span>
           </div>
 
@@ -410,10 +452,15 @@ export default function ContactsPage() {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar contacto…"
               style={{ ...filterInput, paddingLeft: 28, width: 200 }}
+              aria-label="Buscar contacto"
             />
           </div>
 
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={filterInput}>
+          <select
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(0); setSelectedContactIds(new Set()) }}
+            style={filterInput}
+          >
             <option value="all">Todos los status</option>
             <option value="Lead">Lead</option>
             <option value="Cliente">Cliente</option>
@@ -428,7 +475,7 @@ export default function ContactsPage() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: "#9ca3af", fontSize: 14 }}>
             Cargando contactos…
           </div>
-        ) : filtered.length === 0 ? (
+        ) : !loading && contacts.length === 0 ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 200, color: "#9ca3af", gap: 10 }}>
             <span style={{ fontSize: 40 }}>👥</span>
             <p style={{ margin: 0, fontSize: 15, fontWeight: 500 }}>No hay contactos que coincidan</p>
@@ -458,7 +505,7 @@ export default function ContactsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((contact) => {
+                {contacts.map((contact) => {
                   const isSelected = !!contact.id && selectedContactIds.has(contact.id)
                   const statusStyle = STATUS_COLORS[contact.status] ?? { bg: "#f3f4f6", color: "#6b7280" }
                   return (
@@ -534,6 +581,37 @@ export default function ContactsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Paginación ── */}
+      {totalCount > PAGE_SIZE && (
+        <div style={{
+          background: "white", borderTop: "1px solid #e5e7eb",
+          padding: "10px 20px", display: "flex", alignItems: "center",
+          justifyContent: "space-between", flexShrink: 0, gap: 12,
+        }}>
+          <span style={{ fontSize: 13, color: "#6b7280" }}>
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalCount)} de {totalCount}
+          </span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              disabled={page === 0}
+              onClick={() => { setPage((p) => p - 1); setSelectedContactIds(new Set()) }}
+              style={{ ...outlineBtn, opacity: page === 0 ? 0.4 : 1, cursor: page === 0 ? "not-allowed" : "pointer" }}
+            >
+              ← Anterior
+            </button>
+            <button
+              type="button"
+              disabled={(page + 1) * PAGE_SIZE >= totalCount}
+              onClick={() => { setPage((p) => p + 1); setSelectedContactIds(new Set()) }}
+              style={{ ...outlineBtn, opacity: (page + 1) * PAGE_SIZE >= totalCount ? 0.4 : 1, cursor: (page + 1) * PAGE_SIZE >= totalCount ? "not-allowed" : "pointer" }}
+            >
+              Siguiente →
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal nuevo/editar contacto ── */}
       {showForm && (

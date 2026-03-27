@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation"
 import { useState } from "react"
 import { createClient } from "@/app/lib/supabase"
+import { OrgProvider } from "./OrgContext"
 
 const ICO = "#38bdf8"   // celeste
 const S   = 18          // tamaño base
@@ -287,7 +288,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           flexDirection: "column",
         }}
       >
-        {children}
+        {/* OrgProvider resuelve el organization_id una sola vez para todas las páginas */}
+        <OrgProvider>{children}</OrgProvider>
       </main>
     </div>
   )

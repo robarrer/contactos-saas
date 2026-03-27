@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
+import { useOrgId } from "@/app/dashboard/OrgContext"
 import {
   type Agent,
   type BotStatus,
@@ -889,15 +890,9 @@ function useEmbudoData() {
   const [stages, setStages]               = useState<StageConfig[]>(DEFAULT_STAGES)
   const [aiAgents, setAiAgents]           = useState<DbAgent[]>([])
   const [loading, setLoading]             = useState(true)
-  const [orgId, setOrgId]                 = useState<string | null>(null)
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
-        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
-    })
-  }, [])
+  // orgId proviene del OrgProvider del layout; ya no se resuelve localmente.
+  const orgId = useOrgId()
 
   const loadStages = useCallback(async () => {
     if (!orgId) return

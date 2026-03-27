@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
 import { INTEGRATIONS_CATALOG } from "@/app/lib/integrations/catalog"
+import { useOrgId } from "@/app/dashboard/OrgContext"
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -1516,15 +1517,9 @@ export default function AgentesPage() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [saving, setSaving]               = useState(false)
   const [search, setSearch]               = useState("")
-  const [orgId, setOrgId]                 = useState<string | null>(null)
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
-        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
-    })
-  }, [])
+  // orgId proviene del OrgProvider del layout; ya no se resuelve localmente.
+  const orgId = useOrgId()
 
   async function loadAgents() {
     if (!orgId) return

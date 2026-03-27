@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
+import { useOrgId } from "@/app/dashboard/OrgContext"
 import type { Conversation, Message, MockContact } from "./mockData"
 
 // ─── Tipos mapeados desde Supabase ────────────────────────────────────────────
@@ -141,20 +142,14 @@ export function useSupabaseInbox() {
   const [loadingMore, setLoadingMore]     = useState(false)
   const [hasMore, setHasMore]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
-  const [orgId, setOrgId]                 = useState<string | null>(null)
+
+  // orgId proviene del OrgProvider del layout; ya no se resuelve localmente.
+  const orgId = useOrgId()
 
   const activeConvIdRef = useRef<string | null>(null)
   const waMapRef        = useRef<Record<string, string>>({})
   const pageRef         = useRef(0)
   const searchRef       = useRef("")
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      supabase.from("profiles").select("organization_id").eq("id", user.id).maybeSingle()
-        .then(({ data }) => { if (data?.organization_id) setOrgId(data.organization_id) })
-    })
-  }, [])
 
   // ── Cargar una página de conversaciones ──────────────────────────────────
   const loadPage = useCallback(async (search: string, page: number, replace: boolean) => {
@@ -289,22 +284,32 @@ export function useSupabaseInbox() {
     await loadPage(searchRef.current, nextPage, false)
   }, [loadPage, loadingMore, hasMore])
 
+  // Máximo de mensajes a cargar por conversación en la carga inicial.
+  // Conversaciones largas pueden tener cientos de mensajes; traer todos de golpe
+  // es innecesario y lento. Se muestran los más recientes primero.
+  const MESSAGES_LIMIT = 100
+
   // ── Cargar mensajes de una conversación ───────────────────────────────────
   const loadMessages = useCallback(async (conversationId: string) => {
+    // Pedimos los últimos MESSAGES_LIMIT mensajes ordenados desc para aprovechar el índice,
+    // y luego revertimos el array para mostrarlos en orden cronológico ascendente.
     const { data, error } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
+      .limit(MESSAGES_LIMIT)
 
     if (error) {
       console.error("[inbox] Error cargando mensajes:", error.message)
       return
     }
 
+    const sorted = (data ?? []).reverse().map(mapMessage)
+
     setMessages((prev) => {
       const otherConvMsgs = prev.filter((m) => m.conversationId !== conversationId)
-      return [...otherConvMsgs, ...(data ?? []).map(mapMessage)]
+      return [...otherConvMsgs, ...sorted]
     })
   }, [])
 
@@ -542,11 +547,20 @@ export function useSupabaseInbox() {
     if (!orgId) return
     loadConversations()
 
+    // Filtramos por organization_id directamente en Supabase Realtime para evitar
+    // recibir eventos de otras orgs y descartarlos en JS (desperdicio de ancho de banda).
+    // Requiere que la columna organization_id exista en las tablas messages y conversations,
+    // y que la política de Realtime permita el filtro en esa columna.
     const msgChannel = supabase
       .channel("inbox-messages")
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `organization_id=eq.${orgId}`,
+        },
         (payload) => {
           const newMsg = mapMessage(payload.new as DbMessage)
           setMessages((prev) => {
@@ -572,12 +586,22 @@ export function useSupabaseInbox() {
       )
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "conversations" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "conversations",
+          filter: `organization_id=eq.${orgId}`,
+        },
         () => { loadConversations() }
       )
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "conversations" },
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "conversations",
+          filter: `organization_id=eq.${orgId}`,
+        },
         (payload) => {
           const updated = mapConversation(payload.new as DbConversation)
           setConversations((prev) =>
