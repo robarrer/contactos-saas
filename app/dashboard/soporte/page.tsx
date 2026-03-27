@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
 import {
-  PIPELINE_STAGES,
   type Agent,
   type BotStatus,
   type Channel,
@@ -1792,7 +1791,7 @@ export default function SoportePage() {
 
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
   const [showContactPanel, setShowContactPanel] = useState(true)
-  const [stages, setStages] = useState<string[]>(PIPELINE_STAGES)
+  const [stages, setStages] = useState<string[]>([])
 
   useEffect(() => {
     if (!orgId) return
@@ -1802,9 +1801,7 @@ export default function SoportePage() {
       .eq("organization_id", orgId)
       .order("position", { ascending: true })
       .then(({ data }) => {
-        if (data && data.length > 0) {
-          setStages(data.map((s) => s.name))
-        }
+        setStages((data ?? []).map((s) => s.name))
       })
   }, [orgId])
 
