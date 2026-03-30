@@ -868,7 +868,7 @@ function AgentPanel({
   saving: boolean
 }) {
   const [form, setForm]           = useState<Agent>(agent)
-  const [activeTab, setActiveTab] = useState<"entrenamiento" | "integraciones" | "conocimiento" | "seguimientos">("entrenamiento")
+  const [activeTab, setActiveTab] = useState<"entrenamiento" | "integraciones" | "conocimiento">("entrenamiento")
   const textareaRef               = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { setForm(agent); setActiveTab("entrenamiento") }, [agent])
@@ -907,12 +907,11 @@ function AgentPanel({
 
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", paddingLeft: 20, flexShrink: 0 }}>
-        {(["entrenamiento", "integraciones", "conocimiento", "seguimientos"] as const).map((tab) => {
+        {(["entrenamiento", "integraciones", "conocimiento"] as const).map((tab) => {
           const labels: Record<string, string> = {
             entrenamiento: "Entrenamiento",
             integraciones: "Integraciones",
             conocimiento: "Conocimiento",
-            seguimientos: "Seguimientos",
           }
           return (
             <button key={tab} type="button" onClick={() => setActiveTab(tab)}
@@ -933,17 +932,7 @@ function AgentPanel({
       </div>
 
       {/* Content */}
-      {activeTab === "seguimientos" ? (
-        <div style={{ flex: 1, overflow: "auto" }}>
-          {!agent.id ? (
-            <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af" }}>
-              <p style={{ fontSize: 13 }}>Guarda el agente primero para configurar seguimientos.</p>
-            </div>
-          ) : (
-            <FollowupsTab agentId={agent.id} followups={form.followups ?? []} onChange={(f) => upd({ followups: f })} />
-          )}
-        </div>
-      ) : activeTab === "conocimiento" ? (
+      {activeTab === "conocimiento" ? (
         <div style={{ flex: 1, overflow: "auto" }}>
           {!agent.id ? (
             <div style={{ textAlign: "center", padding: "48px 20px", color: "#9ca3af" }}>

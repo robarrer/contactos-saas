@@ -19,10 +19,5 @@
       "maxDuration": 20
     }
   },
-  "crons": [
-    {
-      "path":     "/API/followups/cron",
-      "schedule": "0 13 * * *"
-    }
-  ]
+  "crons": []
 }

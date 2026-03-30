@@ -80,11 +80,21 @@ export async function PUT(req) {
     "anthropic_api_key",
   ]
 
+  const NUMERIC_IDS = ["whatsapp_phone_number_id", "whatsapp_business_account_id"]
+
   const updates = {}
   for (const key of ALLOWED) {
     const val = body[key]
     if (typeof val === "string" && val.trim() !== "") {
-      updates[key] = val.trim()
+      const trimmed = val.trim()
+      if (NUMERIC_IDS.includes(key) && !/^\d+$/.test(trimmed)) {
+        const label = key === "whatsapp_phone_number_id" ? "Phone Number ID" : "WABA ID (Business Account ID)"
+        return Response.json(
+          { error: `El campo "${label}" debe contener solo números (ej: 123456789012345). Recibido: "${trimmed}"` },
+          { status: 400 }
+        )
+      }
+      updates[key] = trimmed
     }
   }
 

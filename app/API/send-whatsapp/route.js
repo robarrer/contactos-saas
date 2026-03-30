@@ -27,7 +27,7 @@ export async function POST(req) {
     // Obtener organización del usuario autenticado (sesión del browser)
     let orgId = null
     let waToken         = process.env.WHATSAPP_TOKEN
-    let waPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || "786386161226350"
+    let waPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID
 
     try {
       const serverClient = await createSupabaseServerClient()

@@ -46,6 +46,15 @@ export async function GET(req) {
     )
   }
 
+  if (!/^\d+$/.test(wabaId)) {
+    return Response.json(
+      {
+        error: `El WABA ID configurado para esta organización no es válido: "${wabaId}". Debe ser un número (ej: 123456789012345). Ve a Ajustes → Organización → WABA ID para corregirlo.`,
+      },
+      { status: 400 }
+    )
+  }
+
   const { searchParams } = new URL(req.url)
   const status = searchParams.get("status") || "APPROVED"
   const limit  = Math.min(parseInt(searchParams.get("limit"), 10) || 50, 100)

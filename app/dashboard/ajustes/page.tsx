@@ -718,6 +718,14 @@ function OrganizacionTab() {
     setError(null)
     const hasAny = Object.values(form).some((v) => v.trim() !== "")
     if (!hasAny) { setError("Completa al menos un campo para actualizar."); return }
+    if (form.whatsapp_phone_number_id.trim() && !/^\d+$/.test(form.whatsapp_phone_number_id.trim())) {
+      setError("El Phone Number ID debe contener solo números (ej: 123456789012345).")
+      return
+    }
+    if (form.whatsapp_business_account_id.trim() && !/^\d+$/.test(form.whatsapp_business_account_id.trim())) {
+      setError("El WABA ID (Business Account ID) debe contener solo números (ej: 123456789012345).")
+      return
+    }
     setSaving(true)
     const res  = await fetch("/API/admin/organization", {
       method:  "PUT",
