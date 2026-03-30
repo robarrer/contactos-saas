@@ -83,7 +83,7 @@ Las demás tablas filtran por `organization_id` en el código de aplicación.
 ## Flujo de seguimientos automáticos (followups)
 
 ```
-[Vercel Cron cada 15 min → GET /API/followups/cron]
+[Vercel Cron (desactivado) → GET /API/followups/cron]
   - Carga todas las conversaciones abiertas en modo bot con last_bot_at en las últimas 24h
   - Para cada una: busca agente por pipeline_stage, lee followups[] del agente
   - Calcula tiempo acumulado (delays son acumulativos entre seguimientos)
@@ -154,7 +154,7 @@ La sincronización periódica de contactos desde Dentalink/Admintour se hace via
 - `INSERT` en `conversations` → agrega conversación nueva a la lista
 - `UPDATE` en `conversations` → actualiza contador de no leídos, último mensaje, modo
 
-**Limitación conocida**: las suscripciones no filtran por `organization_id` en el canal de Supabase; el filtrado ocurre en el handler de JavaScript. Con muchas organizaciones activas esto genera tráfico de red innecesario. Ver sección de deuda técnica.
+Los tres canales filtran por `organization_id` usando el filtro nativo de Supabase Realtime (`filter: organization_id=eq.${orgId}`), por lo que no se reciben eventos de otras organizaciones.
 
 ---
 
@@ -193,7 +193,7 @@ CRON_SECRET=                       # para autenticar Vercel Cron
 | `webhook/whatsapp` | 30s | Procesamiento del payload + scheduleWorker() |
 | `followups/cron` | 60s | Procesa N conversaciones en serie, cada una llama al LLM |
 
-El cron de followups se ejecuta cada 15 minutos: `*/15 * * * *`.
+El cron de followups está actualmente **desactivado** (`"crons": []` en `vercel.json`). Para reactivarlo, restaurar la entrada con el schedule deseado.
 
 ---
 
@@ -209,10 +209,8 @@ El cron de followups se ejecuta cada 15 minutos: `*/15 * * * *`.
 
 **Solución planeada**: procesar en batches de 50 organizaciones por ejecución, con cursor de paginación.
 
-### Problema medio: Realtime sin filtro de organización
-Las suscripciones de `useSupabaseInbox.ts` no usan el filtro `filter: organization_id=eq.X` de Supabase Realtime, lo que significa que se reciben y descartan eventos de otras organizaciones en el cliente.
-
-**Solución planeada**: agregar filtro por `organization_id` al suscribir el canal.
+### ✅ Realtime con filtro de organización (resuelto)
+`useSupabaseInbox.ts` usa `filter: organization_id=eq.${orgId}` en los tres canales. No hay tráfico innecesario entre orgs.
 
 ### Problema menor: RLS incompleto
 Solo `agent_integrations` y `agent_csv_knowledge` tienen Row Level Security. Las tablas `messages`, `conversations`, `contacts` dependen del filtrado en código de aplicación.

@@ -14,26 +14,17 @@ alwaysApply: true
 - El lock es optimista: `DELETE WHERE conversation_id = X AND last_message_at = Y`
 - Plan de migración a escala: reemplazar con Inngest o Upstash QStash
 
-## ⚠️ followups/cron: sin paginación
+## ⏸️ followups/cron: desactivado temporalmente
 
-`/API/followups/cron` carga todas las conversaciones activas de todas las orgs en una query. Con 200+ clientes activos puede exceder el timeout de 60s.
+El cron de seguimientos automáticos está desactivado (`"crons": []` en `vercel.json`). El endpoint `/API/followups/cron` sigue existiendo y puede llamarse manualmente.
 
-- NO agregar lógica pesada dentro del `for (const conv of conversations)` loop
-- Si se agrega una nueva integración, asegurarse de que su llamada tenga `AbortSignal.timeout()`
+**Limitación pendiente cuando se reactive**: carga todas las conversaciones activas de todas las orgs en una sola query, sin paginación. Con 200+ clientes activos puede exceder el timeout de 60s.
 - Plan de migración: procesar en batches de 50 orgs con cursor de paginación
+- NO agregar lógica pesada dentro del `for (const conv of conversations)` loop
 
-## ⚠️ Supabase Realtime: sin filtro de org en el canal
+## ✅ Supabase Realtime: filtro de org implementado
 
-`useSupabaseInbox.ts` recibe eventos de todas las organizaciones y los descarta en JS. No es un riesgo de seguridad (los datos no se muestran) pero sí un desperdicio de ancho de banda con muchas orgs activas.
-
-**Fix pendiente:**
-```ts
-// Cambiar esto:
-.on("postgres_changes", { event: "INSERT", table: "messages" }, handler)
-
-// Por esto:
-.on("postgres_changes", { event: "INSERT", table: "messages", filter: `organization_id=eq.${orgId}` }, handler)
-```
+`useSupabaseInbox.ts` ya filtra por `organization_id` en los tres canales (`messages` INSERT, `conversations` INSERT y UPDATE). No hay tráfico innecesario entre orgs.
 
 ## ⚠️ RLS incompleto
 
