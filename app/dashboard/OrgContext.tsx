@@ -1,8 +1,9 @@
 "use client"
 
 /**
- * OrgContext — resuelve el organization_id del usuario UNA sola vez al montar el layout
- * del dashboard y lo comparte con todas las páginas hijas mediante contexto.
+ * OrgContext — resuelve el organization_id y el nombre de la organización del usuario
+ * UNA sola vez al montar el layout del dashboard y los comparte con todas las páginas
+ * hijas mediante contexto.
  *
  * Antes de este cambio, cada página hacía independientemente:
  *   auth.getUser() → query "profiles"   (2 round-trips secuenciales)
@@ -13,10 +14,16 @@
 import { createContext, useContext, useEffect, useState } from "react"
 import { supabase } from "@/app/lib/supabase"
 
-const OrgContext = createContext<string | null>(null)
+interface OrgContextValue {
+  orgId: string | null
+  orgName: string | null
+}
+
+const OrgContext = createContext<OrgContextValue>({ orgId: null, orgName: null })
 
 export function OrgProvider({ children }: { children: React.ReactNode }) {
-  const [orgId, setOrgId] = useState<string | null>(null)
+  const [orgId, setOrgId]     = useState<string | null>(null)
+  const [orgName, setOrgName] = useState<string | null>(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -26,16 +33,32 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
         .select("organization_id")
         .eq("id", user.id)
         .maybeSingle()
-        .then(({ data }) => {
-          if (data?.organization_id) setOrgId(data.organization_id)
+        .then(async ({ data }) => {
+          if (!data?.organization_id) return
+          setOrgId(data.organization_id)
+          const { data: org } = await supabase
+            .from("organizations")
+            .select("name")
+            .eq("id", data.organization_id)
+            .maybeSingle()
+          if (org?.name) setOrgName(org.name)
         })
     })
   }, [])
 
-  return <OrgContext.Provider value={orgId}>{children}</OrgContext.Provider>
+  return (
+    <OrgContext.Provider value={{ orgId, orgName }}>
+      {children}
+    </OrgContext.Provider>
+  )
 }
 
 /** Hook para consumir el orgId desde cualquier componente hijo del dashboard. */
 export function useOrgId() {
-  return useContext(OrgContext)
+  return useContext(OrgContext).orgId
+}
+
+/** Hook para consumir el nombre de la organización desde cualquier componente hijo del dashboard. */
+export function useOrgName() {
+  return useContext(OrgContext).orgName
 }

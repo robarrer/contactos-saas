@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation"
 import { useState } from "react"
 import { createClient } from "@/app/lib/supabase"
-import { OrgProvider } from "./OrgContext"
+import { OrgProvider, useOrgName } from "./OrgContext"
 
 const ICO = "#38bdf8"   // celeste
 const S   = 18          // tamaño base
@@ -80,6 +80,47 @@ function IconAjustes() {
   )
 }
 
+function OrgNameBadge({ collapsed }: { collapsed: boolean }) {
+  const orgName = useOrgName()
+  if (collapsed || !orgName) return null
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "7px 10px",
+        marginBottom: 8,
+        borderRadius: 10,
+        background: "rgba(56,189,248,0.08)",
+        border: "1px solid rgba(56,189,248,0.15)",
+      }}
+    >
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: "#38bdf8",
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#38bdf8",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {orgName}
+      </span>
+    </div>
+  )
+}
+
 const NAV_ITEMS = [
   { href: "/dashboard",            label: "Dashboard",  Icon: IconDashboard  },
   { href: "/dashboard/contacts",   label: "Contactos",  Icon: IconContacts   },
@@ -115,6 +156,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
+    <OrgProvider>
     <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       <aside
         style={{
@@ -236,6 +278,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })()}
           {/* Botón cerrar sesión — al fondo del sidebar */}
           <div style={{ marginTop: "auto", paddingTop: 12 }}>
+            <OrgNameBadge collapsed={collapsed} />
             <button
               onClick={handleLogout}
               title={collapsed ? "Cerrar sesión" : undefined}
@@ -288,9 +331,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           flexDirection: "column",
         }}
       >
-        {/* OrgProvider resuelve el organization_id una sola vez para todas las páginas */}
-        <OrgProvider>{children}</OrgProvider>
+        {children}
       </main>
     </div>
+    </OrgProvider>
   )
 }
