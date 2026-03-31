@@ -53,25 +53,21 @@ export async function POST(req) {
   const phoneNumberId = body?.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id ?? null
   let organization = null
 
-  console.log("[webhook][diag] phone_number_id del payload:", phoneNumberId)
-
   if (phoneNumberId) {
-    const { data: org, error: orgError } = await supabase
+    const { data: org } = await supabase
       .from("organizations")
       .select("id, whatsapp_app_secret, whatsapp_token, whatsapp_phone_number_id, whatsapp_verify_token")
       .eq("whatsapp_phone_number_id", phoneNumberId)
       .maybeSingle()
     organization = org
-    console.log("[webhook][diag] org encontrada:", org ? `id=${org.id}` : "NULL", "error:", orgError?.message ?? "ninguno")
   }
 
   // Fallback: usar env vars (compatibilidad con setup de un solo tenant)
   const appSecret = organization?.whatsapp_app_secret || process.env.WHATSAPP_APP_SECRET
-  console.log("[webhook][diag] appSecret presente:", !!appSecret, "fuente:", organization?.whatsapp_app_secret ? "org" : (process.env.WHATSAPP_APP_SECRET ? "env" : "NINGUNA"))
 
   // Verificar firma HMAC — obligatorio
   if (!appSecret) {
-    console.error("[webhook] CRÍTICO: No hay whatsapp_app_secret configurado. Rechazando request.", { phoneNumberId })
+    console.error("[webhook] CRÍTICO: No hay whatsapp_app_secret configurado. Rechazando request.")
     return new Response("Service Unavailable", { status: 503 })
   }
 
@@ -82,14 +78,13 @@ export async function POST(req) {
 
   try {
     if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
-      console.warn("[webhook][diag] Firma HMAC inválida. signature:", signature?.slice(0, 20) + "...", "expected:", expected?.slice(0, 20) + "...")
+      console.warn("[webhook] Firma HMAC inválida")
       return new Response("Unauthorized", { status: 401 })
     }
-  } catch (hmacErr) {
-    console.warn("[webhook][diag] Firma HMAC inválida (formato incorrecto). signature length:", signature?.length, "expected length:", expected?.length, "error:", hmacErr?.message)
+  } catch {
+    console.warn("[webhook] Firma HMAC inválida (formato incorrecto)")
     return new Response("Unauthorized", { status: 401 })
   }
-  console.log("[webhook][diag] HMAC verificado OK para org:", organization?.id ?? "sin-org")
 
   const orgId = organization?.id ?? null
 

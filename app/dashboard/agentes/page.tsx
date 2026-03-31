@@ -40,9 +40,11 @@ type AgentIntegration = {
 
 const MODELS: Record<"openai" | "anthropic", { id: string; label: string }[]> = {
   openai: [
-    { id: "gpt-4o",      label: "GPT-4o" },
-    { id: "gpt-4o-mini", label: "GPT-4o mini (económico)" },
-    { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
+    { id: "gpt-5.4",      label: "GPT-5.4 (mejor calidad)" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 mini (recomendado)" },
+    { id: "gpt-5.4-nano", label: "GPT-5.4 nano (económico)" },
+    { id: "gpt-4o",       label: "GPT-4o" },
+    { id: "gpt-4o-mini",  label: "GPT-4o mini" },
   ],
   anthropic: [
     { id: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
@@ -53,7 +55,7 @@ const MODELS: Record<"openai" | "anthropic", { id: string; label: string }[]> = 
 
 const EMPTY_AGENT: Agent = {
   name: "", description: "", instructions: "", active: true,
-  llm_provider: "openai", llm_model: "gpt-4o-mini",
+  llm_provider: "openai", llm_model: "gpt-5.4-mini",
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
