@@ -177,7 +177,7 @@ async function callOpenAI(model, systemPrompt, messages, apiKey, tools = []) {
   const llmTools = tools.length ? buildOpenAITools(tools) : undefined
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    const body = { model, messages: allMessages, max_tokens: 1024, temperature: 0.7 }
+    const body = { model, messages: allMessages, max_completion_tokens: 1024, temperature: 0.7 }
     if (llmTools) { body.tools = llmTools; body.tool_choice = "auto" }
 
     const res = await fetchLLM("https://api.openai.com/v1/chat/completions", {
